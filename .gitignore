@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Production Builds
+dist/
+**/dist/
+build/
+**/build/
+
+# Cloudflare & Serverless caches
+.wrangler/
+**/.wrangler/
+
+# Environment Variables
+.env
+.env.*
+!.env.example
+
+# Logs & Debugging
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+__pycache__/
+*.pyc
+
+# Local agent caches
+.claude/learning/
+.kiro/learning/
+.claude/settings.local.json
+.cursor/learning/
+
+# System & Editor Files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Temporary files
+scratch/
+tmp/
+temp/
