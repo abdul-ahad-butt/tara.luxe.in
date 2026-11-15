@@ -216,41 +216,7 @@
     }
   ],
   "bagEvents": [],
-  "orders": [
-    {
-      "customerName": "Pooja Sharma",
-      "customerPhone": "+91 9876543210",
-      "address": "Flat 402, Royal Palms, MG Road, Bengaluru, Karnataka - 560001",
-      "addressDetails": {
-        "street": "Flat 402, Royal Palms, MG Road",
-        "city": "Bengaluru",
-        "state": "Karnataka",
-        "pincode": "560001"
-      },
-      "paymentMode": "COD",
-      "items": [
-        {
-          "productId": "tl-prod-mwf5pvrq-wipf",
-          "title": "Royal Heritage 18k Gold Kundan Choker",
-          "price": 1299,
-          "quantity": 1,
-          "imageUrl": "https://images.unsplash.com/photo-1515562141207-7a88fb7ce338?auto=format&fit=crop&w=800&q=80"
-        }
-      ],
-      "couponCode": "TARALUXE10",
-      "subtotal": 1299,
-      "discount": 100,
-      "finalTotal": 1199,
-      "status": "Approved",
-      "statusMessage": "Order confirmed and packed with care in our velvet box.",
-      "whatsAppUrl": "https://wa.me/message/U5MPAWAN3UPFM1?text=%E2%9C%A8%20*TARA%20LUXE%20(%40tara.luxe.in)%20ORDER%20REQUEST*%20%E2%9C%A8%0A%0A%F0%9F%94%96%20*Tracking%20Code%3A*%20*TLX-928336*%0A%F0%9F%91%A4%20*Customer%3A*%20Pooja%20Sharma%0A%F0%9F%93%9E%20*Phone%3A*%20%2B91%209876543210%0A%F0%9F%93%8D%20*Delivery%20Address%3A*%20Flat%20402%2C%20Royal%20Palms%2C%20MG%20Road%2C%20Bengaluru%2C%20Karnataka%20-%20560001%0A%F0%9F%92%B3%20*Payment%20Mode%3A*%20COD%0A%0A%F0%9F%9B%8D%EF%B8%8F%20*Ordered%20Pieces%3A*%0A%E2%80%A2%20Royal%20Heritage%2018k%20Gold%20Kundan%20Choker%20(x1)%20-%20%E2%82%B91%2C299%0A%0ASubtotal%3A%20%E2%82%B91%2C299%0ACoupon%20(TARALUXE10)%3A%20-%E2%82%B9100%0A*Payable%20Total%3A%20%E2%82%B91%2C199*%0A%0A_Anti-Tarnish%2018k%20Gold%20Plated%20Jewellery%20%26%20Luxury%20Gift%20Hampers_",
-      "id": "TL-ORD-2944",
-      "trackingCode": "TLX-928336",
-      "createdAt": "2026-11-15T21:23:26.059Z",
-      "updatedAt": "2026-11-15T21:23:26.116Z",
-      "archived": false
-    }
-  ],
+  "orders": [],
   "categories": [
     {
       "id": "cat-hampers",
@@ -356,24 +322,5 @@
     }
   ],
   "isSeeded": true,
-  "notifications": [
-    {
-      "title": "Customer Bag Activity",
-      "message": "Audit Test Piece (x1) added to bag.",
-      "type": "bag",
-      "id": "notif-mwicd6cs-5xlh",
-      "timestamp": "2026-11-15T21:23:26.188Z",
-      "archived": false,
-      "read": false
-    },
-    {
-      "title": "New Order: TLX-928336",
-      "message": "Pooja Sharma placed order for ₹1,199 (1 items).",
-      "type": "order",
-      "id": "notif-mwicd6ai-jdb1",
-      "timestamp": "2026-11-15T21:23:26.106Z",
-      "archived": false,
-      "read": false
-    }
-  ]
+  "notifications": []
 }

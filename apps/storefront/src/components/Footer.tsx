@@ -1,11 +1,8 @@
 import React from 'react';
 import { BrandLogo } from './BrandLogo';
-import { useStore } from '../context/StoreContext';
-import { Phone, Instagram, Heart, Sparkles, MessageCircle, ArrowUp, PackageCheck, Users } from 'lucide-react';
+import { Phone, Instagram, Heart, ArrowUp, Users } from 'lucide-react';
 
 export const Footer: React.FC = () => {
-  const { setIsTrackingModalOpen } = useStore();
-
   const scrollToTop = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -68,32 +65,14 @@ export const Footer: React.FC = () => {
             </ul>
           </div>
 
-          {/* Col 3: Retail & Wholesale Inquiries (clean, no WHOLESALE25 hardcoded text) */}
+          {/* Col 3: Retail & Wholesale Inquiries (Clean editorial text) */}
           <div>
             <h4 className="text-xs font-mono uppercase tracking-widest text-gold-brushed mb-4 font-semibold">
               Retail & Wholesale Orders
             </h4>
-            <p className="text-xs text-ivory-warm/70 leading-relaxed mb-4">
+            <p className="text-xs text-ivory-warm/70 leading-relaxed">
               We supply retail boutiques and provide bulk orders for wedding return gifts, corporate events, and festive celebrations across India.
             </p>
-            <div className="space-y-2.5 text-xs">
-              <a
-                href="https://wa.me/message/U5MPAWAN3UPFM1"
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-center gap-2 text-gold hover:text-gold-light"
-              >
-                <MessageCircle className="w-4 h-4" />
-                <span>Wholesale WhatsApp: +91 7871501939</span>
-              </a>
-              <button
-                onClick={() => setIsTrackingModalOpen(true)}
-                className="flex items-center gap-2 text-gold-light hover:underline font-mono text-[11px]"
-              >
-                <PackageCheck className="w-3.5 h-3.5 text-gold" />
-                <span>Track Your Live Order (TLX-XXXXXX)</span>
-              </button>
-            </div>
           </div>
 
           {/* Col 4: Verified Channels (No admin link) */}
