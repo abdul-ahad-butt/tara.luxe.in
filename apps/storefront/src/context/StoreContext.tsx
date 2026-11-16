@@ -149,7 +149,21 @@ interface StoreContextType {
   bagCount: number;
 }
 
-const BACKEND_URL = 'http://localhost:8787';
+const getBackendUrl = (): string => {
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
+  }
+  if (typeof window !== 'undefined') {
+    const { hostname, origin } = window.location;
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.')) {
+      return 'http://localhost:8787';
+    }
+    return origin;
+  }
+  return 'http://localhost:8787';
+};
+
+const BACKEND_URL = getBackendUrl();
 
 const StoreContext = createContext<StoreContextType | undefined>(undefined);
 

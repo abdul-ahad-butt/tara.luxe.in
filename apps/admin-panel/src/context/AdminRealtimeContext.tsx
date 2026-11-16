@@ -197,7 +197,21 @@ interface AdminContextType {
   totalBagItemsAddedToday: number;
 }
 
-const BACKEND_URL = 'http://localhost:8787';
+const getBackendUrl = (): string => {
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
+  }
+  if (typeof window !== 'undefined') {
+    const { hostname, origin } = window.location;
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.')) {
+      return 'http://localhost:8787';
+    }
+    return 'https://tara-luxe-in.workers.dev';
+  }
+  return 'http://localhost:8787';
+};
+
+const BACKEND_URL = getBackendUrl();
 
 const AdminContext = createContext<AdminContextType | undefined>(undefined);
 
