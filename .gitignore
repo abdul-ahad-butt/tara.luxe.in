@@ -26,11 +26,10 @@ pnpm-debug.log*
 __pycache__/
 *.pyc
 
-# Local agent caches
-.claude/learning/
-.kiro/learning/
-.claude/settings.local.json
-.cursor/learning/
+# Local agent and editor caches
+.claude/
+.kiro/
+.cursor/
 
 # System & Editor Files
 .DS_Store
