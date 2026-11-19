@@ -123,9 +123,9 @@ const AdminDashboardContent: React.FC = () => {
               />
             </div>
 
-            {/* External Storefront link */}
+            {/* External Storefront link (Local: :3000 | Prod: tara-luxe-in.pages.dev) */}
             <a
-              href="http://localhost:3000"
+              href={typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:3000' : 'https://tara-luxe-in.pages.dev'}
               target="_blank"
               rel="noreferrer"
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gold/15 hover:bg-gold/25 border border-gold/40 text-gold-light text-xs font-semibold transition-all shadow-sm"

@@ -120,9 +120,9 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ activeTab, setActive
           </div>
         </div>
 
-        {/* View Customer Storefront External Link (Clean, no port text) */}
+        {/* View Customer Storefront External Link (Local: :3000 | Prod: tara-luxe-in.pages.dev) */}
         <a
-          href="http://localhost:3000"
+          href={typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:3000' : 'https://tara-luxe-in.pages.dev'}
           target="_blank"
           rel="noreferrer"
           className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-gold/10 hover:bg-gold/20 border border-gold/40 text-gold-light text-xs font-semibold transition-all"

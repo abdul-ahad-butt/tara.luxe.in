@@ -4,7 +4,6 @@
 // Complete Seed Data, D1 Persistence Auto-Migration, Permissive CORS & Real-Time SSE Broadcaster
 
 export interface Env {
-  ASSETS?: { fetch: (request: Request) => Promise<Response> };
   DB?: any;
   TARA_DB?: any;
   ADMIN_EMAIL?: string;
@@ -594,15 +593,44 @@ export default {
     const pathname = url.pathname;
 
     // -------------------------------------------------------------
-    // API ROUTES (/api/*)
+    // ROOT STATUS & API ROUTES (/ & /api/*)
     // -------------------------------------------------------------
+    if (pathname === '/' && method === 'GET') {
+      return jsonResponse({
+        service: 'Tara Luxe Shared Backend API',
+        status: 'ok',
+        environment: d1 ? 'cloudflare-workers-d1' : 'cloudflare-workers',
+        brand: 'Tara Luxe (@tara.luxe.in)',
+        version: '2.0.0',
+        timestamp: new Date().toISOString(),
+        sseClients: sseStreams.size,
+        totalProducts: memoryDb.products.length,
+        totalCategories: memoryDb.categories.length,
+        totalCoupons: memoryDb.coupons.length,
+        totalOrders: memoryDb.orders.length,
+        endpoints: [
+          '/api/health',
+          '/api/products',
+          '/api/categories',
+          '/api/coupons',
+          '/api/highlights',
+          '/api/collaborations',
+          '/api/bag-events',
+          '/api/orders',
+          '/api/admin/login',
+          '/api/stream'
+        ]
+      }, 200, request);
+    }
+
     if (pathname.startsWith('/api/')) {
       // 1. Health
       if (pathname === '/api/health' && method === 'GET') {
         return jsonResponse({
+          service: 'Tara Luxe Shared Backend API',
           status: 'ok',
+          environment: d1 ? 'cloudflare-workers-d1' : 'cloudflare-workers',
           brand: 'Tara Luxe (@tara.luxe.in)',
-          environment: d1 ? 'Cloudflare Workers + D1 Persistence' : 'Cloudflare Workers Edge (In-Memory)',
           version: '2.0.0',
           timestamp: new Date().toISOString(),
           sseClients: sseStreams.size,
@@ -611,7 +639,19 @@ export default {
           totalHighlights: memoryDb.highlights.length,
           totalCollaborations: memoryDb.collaborations.length,
           totalCoupons: memoryDb.coupons.length,
-          totalOrders: memoryDb.orders.length
+          totalOrders: memoryDb.orders.length,
+          endpoints: [
+            '/api/health',
+            '/api/products',
+            '/api/categories',
+            '/api/coupons',
+            '/api/highlights',
+            '/api/collaborations',
+            '/api/bag-events',
+            '/api/orders',
+            '/api/admin/login',
+            '/api/stream'
+          ]
         }, 200, request);
       }
 
@@ -1303,15 +1343,27 @@ export default {
     }
 
     // -------------------------------------------------------------
-    // STATIC ASSETS FALLBACK (Non-/api/* requests)
+    // PURE BACKEND API FALLBACK (Any non-matched routes)
     // -------------------------------------------------------------
-    if (env.ASSETS) {
-      return await env.ASSETS.fetch(request);
-    }
-
-    return new Response('Tara Luxe Cloudflare Worker Online', {
-      status: 200,
-      headers: { 'Content-Type': 'text/plain', ...corsHeaders(request) }
-    });
+    return jsonResponse({
+      service: 'Tara Luxe Shared Backend API',
+      status: 'ok',
+      environment: d1 ? 'cloudflare-workers-d1' : 'cloudflare-workers',
+      brand: 'Tara Luxe (@tara.luxe.in)',
+      version: '2.0.0',
+      timestamp: new Date().toISOString(),
+      endpoints: [
+        '/api/health',
+        '/api/products',
+        '/api/categories',
+        '/api/coupons',
+        '/api/highlights',
+        '/api/collaborations',
+        '/api/bag-events',
+        '/api/orders',
+        '/api/admin/login',
+        '/api/stream'
+      ]
+    }, 200, request);
   }
 };

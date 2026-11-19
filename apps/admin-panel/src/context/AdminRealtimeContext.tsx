@@ -198,23 +198,23 @@ interface AdminContextType {
 }
 
 const getBackendUrl = (): string => {
-  // Priority 1: import.meta.env.VITE_API_URL (when set in Cloudflare Pages → Variables and secrets)
-  if (import.meta.env.VITE_API_URL) {
-    return (import.meta.env.VITE_API_URL as string).replace(/\/+$/, '');
+  // 1. import.meta.env.VITE_API_URL if set and non-empty (stripping any trailing /)
+  if (import.meta.env.VITE_API_URL && (import.meta.env.VITE_API_URL as string).trim() !== '') {
+    return (import.meta.env.VITE_API_URL as string).trim().replace(/\/+$/, '');
   }
   if (typeof window !== 'undefined') {
     const savedUrl = localStorage.getItem('tlx_api_url');
-    if (savedUrl) return savedUrl.replace(/\/+$/, '');
+    if (savedUrl && savedUrl.trim() !== '') return savedUrl.trim().replace(/\/+$/, '');
 
     const { hostname } = window.location;
-    // Priority 2: localhost / 127.0.0.1 in local dev
+    // 2. http://localhost:8787 when running locally
     if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.')) {
       return 'http://localhost:8787';
     }
-    // Priority 3: On *.pages.dev without VITE_API_URL at build time, fall back to deployed Worker URL
-    return 'https://tara-luxe-in.workers.dev';
+    // 3. In production (*.pages.dev or any custom domain), default to dedicated Worker API
+    return 'https://tara-luxe-in.taraluxe180.workers.dev';
   }
-  return 'http://localhost:8787';
+  return 'https://tara-luxe-in.taraluxe180.workers.dev';
 };
 
 const BACKEND_URL = getBackendUrl();

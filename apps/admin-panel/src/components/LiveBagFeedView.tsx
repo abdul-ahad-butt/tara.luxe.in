@@ -386,7 +386,7 @@ export const LiveBagFeedView: React.FC = () => {
             </p>
             <p className="text-xs text-ivory/60 max-w-sm mx-auto mt-1">
               {activeSubTab === 'active'
-                ? 'Open the customer storefront on http://localhost:3000 and click "Add to Bag" on any piece to watch events stream here in real time.'
+                ? 'Open the customer storefront and click "Add to Bag" on any piece to watch events stream here in real time.'
                 : 'Items you archive from the Active Stream will appear here.'}
             </p>
           </div>
