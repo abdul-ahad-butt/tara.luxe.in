@@ -181,14 +181,21 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [bag, setBag] = useState<BagItem[]>(() => {
     try {
-      const saved = localStorage.getItem('tl_bag');
+      const saved = localStorage.getItem('tlx_customer_bag_v1') || localStorage.getItem('tl_bag');
       return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
     }
   });
   const [isBagOpen, setIsBagOpen] = useState(false);
-  const [appliedCoupon, setAppliedCoupon] = useState<AppliedCouponInfo | null>(null);
+  const [appliedCoupon, setAppliedCoupon] = useState<AppliedCouponInfo | null>(() => {
+    try {
+      const saved = localStorage.getItem('tlx_customer_coupon_v1');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
   const [activeCategory, setActiveCategory] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('featured');
@@ -210,11 +217,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [trackingError, setTrackingError] = useState<string | null>(null);
   const [isTrackingLoading, setIsTrackingLoading] = useState(false);
 
-  // Persistent guest session ID
+  // Persistent guest device session ID
   const sessionId = useMemo(() => {
-    let id = localStorage.getItem('tl_session_id');
+    let id = localStorage.getItem('tlx_device_session_id') || localStorage.getItem('tl_session_id');
     if (!id) {
-      id = `guest-${Math.random().toString(36).substring(2, 9)}`;
+      id = `tlx-guest-${Math.random().toString(36).substring(2, 9)}`;
+      localStorage.setItem('tlx_device_session_id', id);
       localStorage.setItem('tl_session_id', id);
     }
     return id;
@@ -227,12 +235,73 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }, 4000);
   }, []);
 
-  // Save bag to local storage
+  // Multi-tab BroadcastChannel & Storage Sync
+  const bagBroadcastRef = React.useRef<BroadcastChannel | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      const channel = new BroadcastChannel('tara-luxe-bag-sync');
+      bagBroadcastRef.current = channel;
+
+      channel.onmessage = (event) => {
+        if (event.data?.type === 'TLX_BAG_SYNC') {
+          if (Array.isArray(event.data.bag)) {
+            setBag(event.data.bag);
+          }
+          if (event.data.appliedCoupon !== undefined) {
+            setAppliedCoupon(event.data.appliedCoupon);
+          }
+        }
+      };
+
+      return () => {
+        channel.close();
+        bagBroadcastRef.current = null;
+      };
+    }
+  }, []);
+
+  // Cross-tab storage event listener
+  useEffect(() => {
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'tlx_customer_bag_v1' || e.key === 'tl_bag') {
+        try {
+          if (e.newValue) setBag(JSON.parse(e.newValue));
+        } catch {}
+      }
+      if (e.key === 'tlx_customer_coupon_v1') {
+        try {
+          setAppliedCoupon(e.newValue ? JSON.parse(e.newValue) : null);
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, []);
+
+  // Save bag to local storage & broadcast to other tabs
   useEffect(() => {
     try {
+      localStorage.setItem('tlx_customer_bag_v1', JSON.stringify(bag));
       localStorage.setItem('tl_bag', JSON.stringify(bag));
+      bagBroadcastRef.current?.postMessage({
+        type: 'TLX_BAG_SYNC',
+        bag,
+        appliedCoupon
+      });
     } catch {}
-  }, [bag]);
+  }, [bag, appliedCoupon]);
+
+  // Save applied coupon to local storage
+  useEffect(() => {
+    try {
+      if (appliedCoupon) {
+        localStorage.setItem('tlx_customer_coupon_v1', JSON.stringify(appliedCoupon));
+      } else {
+        localStorage.removeItem('tlx_customer_coupon_v1');
+      }
+    } catch {}
+  }, [appliedCoupon]);
 
   // Save active orders to local storage
   useEffect(() => {
@@ -241,183 +310,96 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     } catch {}
   }, [activeOrders]);
 
-  // Initial Fetch: Products, Categories, Highlights, Collabs, Coupons & Order Statuses
-  const fetchData = useCallback(async () => {
+  // Real-Time /api/sync Polling Engine (Every 2.5s + on focus/visibility)
+  const fetchSyncData = useCallback(async () => {
     try {
-      setLoading(true);
-      const [resProd, resCat, resHigh, resCollab, resCoup] = await Promise.all([
-        fetch(`${BACKEND_URL}/api/products`),
-        fetch(`${BACKEND_URL}/api/categories`),
-        fetch(`${BACKEND_URL}/api/highlights`),
-        fetch(`${BACKEND_URL}/api/collaborations`),
-        fetch(`${BACKEND_URL}/api/coupons`)
-      ]);
+      const res = await fetch(`${BACKEND_URL}/api/sync?_t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache'
+        }
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && (data.success || Array.isArray(data.products))) {
+        if (Array.isArray(data.products) && data.products.length > 0) {
+          setProducts(data.products);
 
-      const [dProd, dCat, dHigh, dCollab, dCoup] = await Promise.all([
-        resProd.json(),
-        resCat.json(),
-        resHigh.json(),
-        resCollab.json(),
-        resCoup.json()
-      ]);
-
-      if (dProd.success) setProducts(dProd.data);
-      if (dCat.success) setCategories(dCat.data);
-      if (dHigh.success) setHighlights(dHigh.data);
-      if (dCollab.success) setCollaborations(dCollab.data);
-      if (dCoup.success) setCoupons(dCoup.data);
-
-      // Re-fetch latest status for any active customer orders in localStorage
-      const savedOrdersRaw = localStorage.getItem('tlx_active_orders');
-      if (savedOrdersRaw) {
-        try {
-          const parsedOrders: Order[] = JSON.parse(savedOrdersRaw);
-          if (parsedOrders.length > 0) {
-            const updatedList: Order[] = [];
-            for (const ord of parsedOrders) {
-              const code = ord.trackingCode || ord.id;
-              try {
-                const trackRes = await fetch(`${BACKEND_URL}/api/orders/track/${encodeURIComponent(code)}`);
-                const trackData = await trackRes.json();
-                if (trackData.success && trackData.data) {
-                  updatedList.push(trackData.data);
-                } else {
-                  updatedList.push(ord);
-                }
-              } catch {
-                updatedList.push(ord);
+          // Real-time stock & details reconciliation for bag items
+          setBag((prevBag) =>
+            prevBag.map((item) => {
+              const latest = data.products.find((p: Product) => p.id === item.productId);
+              if (latest) {
+                return { ...item, product: latest };
               }
-            }
-            setActiveOrders(updatedList);
-          }
-        } catch {}
+              return item;
+            })
+          );
+        }
+        if (Array.isArray(data.categories)) setCategories(data.categories);
+        if (Array.isArray(data.highlights)) setHighlights(data.highlights);
+        if (Array.isArray(data.collaborations)) setCollaborations(data.collaborations);
+        if (Array.isArray(data.coupons)) {
+          setCoupons(data.coupons);
+          // Revalidate applied coupon
+          setAppliedCoupon((curr) => {
+            if (!curr) return null;
+            const match = data.coupons.find((c: Coupon) => c.code === curr.coupon.code);
+            if (!match || !match.active) return null;
+            return { ...curr, coupon: match };
+          });
+        }
+        if (Array.isArray(data.orders)) {
+          setActiveOrders((currOrders) =>
+            currOrders.map((o) => {
+              const match = data.orders.find((ord: Order) => ord.id === o.id || ord.trackingCode === o.trackingCode);
+              return match || o;
+            })
+          );
+        }
       }
     } catch (err) {
-      console.error('Failed to load store data from backend:', err);
+      console.warn('[Storefront] Sync fetch notice:', err);
     } finally {
       setLoading(false);
     }
   }, []);
 
+  // Periodic 2.5s Sync Polling
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    fetchSyncData();
+    const timer = setInterval(fetchSyncData, 2500);
 
-  // Connect to SSE Stream for zero-refresh real-time updates!
-  useEffect(() => {
-    let eventSource: EventSource | null = null;
-    let reconnectTimeout: any = null;
-
-    const connect = () => {
-      eventSource = new EventSource(`${BACKEND_URL}/api/stream`);
-
-      eventSource.onopen = () => {
-        console.log('[Storefront SSE] Connected to real-time stream.');
-      };
-
-      eventSource.onmessage = (event) => {
-        try {
-          const payload = JSON.parse(event.data);
-          const { type, data } = payload;
-
-          if (type === 'STOCK_ADJUSTED') {
-            const { productId, quantity } = data;
-            setProducts((prev) =>
-              prev.map((p) => (p.id === productId ? { ...p, quantity } : p))
-            );
-
-            setBag((prevBag) =>
-              prevBag.map((item) => {
-                if (item.productId === productId) {
-                  const cappedQty = Math.min(item.quantity, quantity);
-                  return {
-                    ...item,
-                    quantity: cappedQty,
-                    product: { ...item.product, quantity }
-                  };
-                }
-                return item;
-              }).filter((item) => item.quantity > 0)
-            );
-          } else if (type === 'PRODUCT_UPDATED') {
-            setProducts((prev) =>
-              prev.map((p) => (p.id === data.id ? data : p))
-            );
-            setBag((prevBag) =>
-              prevBag.map((item) =>
-                item.productId === data.id ? { ...item, product: data } : item
-              )
-            );
-          } else if (type === 'PRODUCT_CREATED') {
-            setProducts((prev) => [data, ...prev.filter((p) => p.id !== data.id)]);
-          } else if (type === 'PRODUCT_DELETED') {
-            setProducts((prev) => prev.filter((p) => p.id !== data.productId));
-            setBag((prev) => prev.filter((item) => item.productId !== data.productId));
-          } else if (type === 'CATEGORY_CREATED') {
-            setCategories((prev) => [...prev.filter((c) => c.id !== data.id), data]);
-          } else if (type === 'CATEGORY_DELETED') {
-            setCategories((prev) => prev.filter((c) => c.id !== data.categoryId));
-          } else if (type === 'HIGHLIGHT_CREATED') {
-            setHighlights((prev) => [...prev.filter((h) => h.id !== data.id), data]);
-          } else if (type === 'HIGHLIGHT_UPDATED') {
-            setHighlights((prev) => prev.map((h) => (h.id === data.id ? data : h)));
-          } else if (type === 'HIGHLIGHT_DELETED') {
-            setHighlights((prev) => prev.filter((h) => h.id !== data.highlightId));
-          } else if (type === 'COLLAB_CREATED') {
-            setCollaborations((prev) => [data, ...prev.filter((c) => c.id !== data.id)]);
-          } else if (type === 'COLLAB_UPDATED') {
-            setCollaborations((prev) => prev.map((c) => (c.id === data.id ? data : c)));
-          } else if (type === 'COLLAB_DELETED') {
-            setCollaborations((prev) => prev.filter((c) => c.id !== data.collabId));
-          } else if (type === 'COUPON_CREATED' || type === 'COUPON_UPDATED') {
-            setCoupons((prev) => {
-              const idx = prev.findIndex((c) => c.id === data.id);
-              if (idx >= 0) {
-                const next = [...prev];
-                next[idx] = data;
-                return next;
-              }
-              return [data, ...prev];
-            });
-          } else if (type === 'COUPON_DELETED') {
-            setCoupons((prev) => prev.filter((c) => c.id !== data.couponId));
-            setAppliedCoupon((curr) => (curr?.coupon.id === data.couponId ? null : curr));
-          } else if (type === 'ORDER_STATUS_UPDATED') {
-            // Live real-time customer order status update!
-            const { orderId, trackingCode, status, statusMessage, order } = data;
-            setActiveOrders((prevOrders) =>
-              prevOrders.map((o) => {
-                if (o.id === orderId || o.trackingCode === trackingCode) {
-                  return order || { ...o, status, statusMessage };
-                }
-                return o;
-              })
-            );
-            setSearchedOrder((curr) =>
-              curr && (curr.id === orderId || curr.trackingCode === trackingCode)
-                ? order || { ...curr, status, statusMessage }
-                : curr
-            );
-            showNotification(`Order ${trackingCode || orderId} status updated: ${status} ✦`);
-          }
-        } catch (err) {
-          console.error('[Storefront SSE Parse Error]:', err);
-        }
-      };
-
-      eventSource.onerror = () => {
-        if (eventSource) eventSource.close();
-        reconnectTimeout = setTimeout(connect, 3000);
-      };
+    const onFocus = () => fetchSyncData();
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') fetchSyncData();
     };
 
-    connect();
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+
+    // If running on localhost, attach SSE for local push events
+    let eventSource: EventSource | null = null;
+    const isLocal = typeof window !== 'undefined' && 
+      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+    if (isLocal) {
+      try {
+        eventSource = new EventSource(`${BACKEND_URL}/api/stream`);
+        eventSource.onmessage = () => {
+          fetchSyncData();
+        };
+      } catch {}
+    }
 
     return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
       if (eventSource) eventSource.close();
-      if (reconnectTimeout) clearTimeout(reconnectTimeout);
     };
-  }, [showNotification]);
+  }, [fetchSyncData]);
 
   // Calculate Subtotal & Totals
   const bagSubtotal = useMemo(() => {

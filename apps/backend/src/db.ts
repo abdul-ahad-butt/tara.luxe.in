@@ -446,6 +446,18 @@ const INITIAL_COUPONS: Coupon[] = [
     usageCount: 0,
     maxUses: 1000,
     createdAt: new Date().toISOString()
+  },
+  {
+    id: 'coup-abc',
+    code: 'ABC',
+    type: 'PERCENTAGE',
+    value: 20,
+    minOrderAmount: 1000,
+    active: true,
+    description: 'Exclusive 20% off on 18k Anti-Tarnish pieces',
+    usageCount: 0,
+    maxUses: 1000,
+    createdAt: '2026-11-19T00:00:00.000Z'
   }
 ];
 

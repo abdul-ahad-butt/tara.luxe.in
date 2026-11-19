@@ -57,6 +57,48 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Real-time complete state sync snapshot endpoint (Cache-busted, zero isolate timeout)
+app.get('/api/sync', (req, res) => {
+  const products = db.getProducts();
+  const categories = db.getCategories();
+  const highlights = db.getHighlights();
+  const collaborations = db.getCollaborations();
+  const coupons = db.getCoupons();
+  const bagEvents = db.getBagEvents();
+  const orders = db.getOrders();
+  const notifications = (db as any).getNotifications ? (db as any).getNotifications() : [];
+
+  const totalOrdersVal = orders.reduce((acc, o) => acc + (Number(o.finalTotal) || 0), 0);
+  const lowStock = products.filter((p) => p.quantity > 0 && p.quantity <= 5).length;
+  const outOfStock = products.filter((p) => p.quantity <= 0).length;
+
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.json({
+    success: true,
+    status: 'ok',
+    database: 'local-file-db',
+    timestamp: new Date().toISOString(),
+    products,
+    categories,
+    highlights,
+    collaborations,
+    coupons,
+    bagEvents,
+    orders,
+    notifications,
+    kpis: {
+      totalProducts: products.length,
+      totalInventory: products.reduce((acc, p) => acc + (Number(p.quantity) || 0), 0),
+      lowStockCount: lowStock,
+      outOfStockCount: outOfStock,
+      totalOrdersCount: orders.length,
+      totalRevenue: totalOrdersVal,
+      unreadNotifications: notifications.filter((n: any) => !n.read).length
+    }
+  });
+});
+
 // SSE real-time stream endpoint
 app.get('/api/stream', (req, res) => {
   sse.handleConnection(req, res);

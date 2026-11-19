@@ -275,180 +275,95 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
     setAdminUser(null);
   }, []);
 
-  // Fetch initial data
-  const fetchAllData = useCallback(async () => {
-    try {
-      const [prodRes, catRes, hlRes, colRes, coupRes, bagRes, ordRes, notifRes] = await Promise.all([
-        fetch(`${BACKEND_URL}/api/products`).then((r) => r.json()).catch(() => ({ data: [] })),
-        fetch(`${BACKEND_URL}/api/categories`).then((r) => r.json()).catch(() => ({ data: [] })),
-        fetch(`${BACKEND_URL}/api/highlights`).then((r) => r.json()).catch(() => ({ data: [] })),
-        fetch(`${BACKEND_URL}/api/collaborations`).then((r) => r.json()).catch(() => ({ data: [] })),
-        fetch(`${BACKEND_URL}/api/coupons`).then((r) => r.json()).catch(() => ({ data: [] })),
-        fetch(`${BACKEND_URL}/api/bag-events`).then((r) => r.json()).catch(() => ({ data: [] })),
-        fetch(`${BACKEND_URL}/api/orders`).then((r) => r.json()).catch(() => ({ data: [] })),
-        fetch(`${BACKEND_URL}/api/notifications`).then((r) => r.json()).catch(() => ({ data: [] }))
-      ]);
+  // Real-Time /api/sync Polling Engine (Zero Worker timeout errors, sub-2.5s live sync)
+  const consecutiveFailuresRef = React.useRef(0);
 
-      if (prodRes.data) setProducts(prodRes.data);
-      if (catRes.data) setCategories(catRes.data);
-      if (hlRes.data) setHighlights(hlRes.data);
-      if (colRes.data) setCollaborations(colRes.data);
-      if (coupRes.data) setCoupons(coupRes.data);
-      if (bagRes.data) setBagEvents(bagRes.data);
-      if (ordRes.data) setOrders(ordRes.data);
-      if (notifRes.data) {
-        setAlerts(notifRes.data);
-        const unread = notifRes.data.filter((n: AlertNotification) => !n.read).length;
-        setUnreadEventsCount(unread);
+  const fetchSyncData = useCallback(async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/sync?_t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache'
+        }
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data && (data.success || Array.isArray(data.products))) {
+        consecutiveFailuresRef.current = 0;
+        setSseConnected(true);
+
+        if (Array.isArray(data.products)) setProducts(data.products);
+        if (Array.isArray(data.categories)) setCategories(data.categories);
+        if (Array.isArray(data.highlights)) setHighlights(data.highlights);
+        if (Array.isArray(data.collaborations)) setCollaborations(data.collaborations);
+        if (Array.isArray(data.coupons)) setCoupons(data.coupons);
+        if (Array.isArray(data.bagEvents)) setBagEvents(data.bagEvents);
+        if (Array.isArray(data.orders)) setOrders(data.orders);
+        if (Array.isArray(data.notifications)) {
+          setAlerts(data.notifications);
+          const unread = data.notifications.filter((n: AlertNotification) => !n.read).length;
+          setUnreadEventsCount(unread);
+        }
       }
-    } catch (err) {
-      console.error('[Admin] Initial fetch error:', err);
+    } catch {
+      consecutiveFailuresRef.current += 1;
+      if (consecutiveFailuresRef.current >= 3) {
+        setSseConnected(false);
+      }
     }
   }, []);
 
+  // Periodic 2.5-second live sync polling + window focus & visibility triggers
   useEffect(() => {
-    fetchAllData();
-  }, [fetchAllData]);
+    fetchSyncData();
+    const intervalTimer = setInterval(fetchSyncData, 2500);
 
-  // Connect SSE Stream
-  useEffect(() => {
-    let eventSource: EventSource | null = null;
-    let reconnectTimer: NodeJS.Timeout | null = null;
-
-    const connectSSE = () => {
-      eventSource = new EventSource(`${BACKEND_URL}/api/stream`);
-
-      eventSource.onopen = () => {
-        setSseConnected(true);
-      };
-
-      eventSource.onmessage = (event) => {
-        try {
-          const parsed = JSON.parse(event.data);
-          const { type, data } = parsed;
-
-          if (type === 'BAG_EVENT_CREATED') {
-            setBagEvents((prev) => [data, ...prev]);
-            setUnreadEventsCount((c) => c + 1);
-          } else if (type === 'BAG_EVENT_UPDATED') {
-            setBagEvents((prev) => prev.map((b) => (b.id === data.id ? data : b)));
-          } else if (type === 'BAG_EVENT_DELETED') {
-            setBagEvents((prev) => prev.filter((b) => b.id !== data.id));
-          } else if (type === 'BAG_EVENTS_BULK_DELETED') {
-            const set = new Set(data.ids);
-            setBagEvents((prev) => prev.filter((b) => !set.has(b.id)));
-          } else if (type === 'BAG_EVENTS_ARCHIVED') {
-            const set = new Set(data.ids);
-            setBagEvents((prev) => prev.map((b) => (set.has(b.id) ? { ...b, archived: data.archived } : b)));
-          } else if (type === 'ORDER_CREATED') {
-            setOrders((prev) => [data, ...prev]);
-            setUnreadEventsCount((c) => c + 1);
-          } else if (type === 'ORDER_STATUS_UPDATED' || type === 'ORDER_UPDATED') {
-            const targetOrder = data.order || data;
-            setOrders((prev) =>
-              prev.map((o) => (o.id === targetOrder.id ? targetOrder : o))
-            );
-          } else if (type === 'ORDER_DELETED') {
-            setOrders((prev) => prev.filter((o) => o.id !== data.id));
-          } else if (type === 'ORDERS_BULK_DELETED') {
-            const set = new Set(data.ids);
-            setOrders((prev) => prev.filter((o) => !set.has(o.id)));
-          } else if (type === 'ORDERS_ARCHIVED') {
-            const set = new Set(data.ids);
-            setOrders((prev) => prev.map((o) => (set.has(o.id) ? { ...o, archived: data.archived } : o)));
-          } else if (type === 'NOTIFICATION_CREATED') {
-            setAlerts((prev) => [data, ...prev]);
-            setUnreadEventsCount((c) => c + 1);
-          } else if (type === 'NOTIFICATION_UPDATED') {
-            setAlerts((prev) => prev.map((a) => (a.id === data.id ? data : a)));
-          } else if (type === 'NOTIFICATION_DELETED') {
-            setAlerts((prev) => prev.filter((a) => a.id !== data.id));
-          } else if (type === 'NOTIFICATIONS_BULK_DELETED') {
-            const set = new Set(data.ids);
-            setAlerts((prev) => prev.filter((a) => !set.has(a.id)));
-          } else if (type === 'NOTIFICATIONS_ARCHIVED') {
-            const set = new Set(data.ids);
-            setAlerts((prev) => prev.map((a) => (set.has(a.id) ? { ...a, archived: data.archived } : a)));
-          } else if (type === 'NOTIFICATIONS_CLEARED') {
-            setAlerts([]);
-            setUnreadEventsCount(0);
-          } else if (type === 'NOTIFICATIONS_READ') {
-            setAlerts((prev) => prev.map((a) => ({ ...a, read: true })));
-            setUnreadEventsCount(0);
-          } else if (type === 'STOCK_ADJUSTED') {
-            setProducts((prev) =>
-              prev.map((p) => (p.id === data.productId ? { ...p, quantity: data.quantity } : p))
-            );
-          } else if (type === 'PRODUCT_CREATED') {
-            setProducts((prev) => [data, ...prev.filter((p) => p.id !== data.id)]);
-          } else if (type === 'PRODUCT_UPDATED') {
-            setProducts((prev) => prev.map((p) => (p.id === data.id ? data : p)));
-          } else if (type === 'PRODUCT_DELETED') {
-            setProducts((prev) => prev.filter((p) => p.id !== data.productId));
-          } else if (type === 'PRODUCTS_BULK_DELETED') {
-            const set = new Set(data.ids);
-            setProducts((prev) => prev.filter((p) => !set.has(p.id)));
-          } else if (type === 'CATEGORY_CREATED') {
-            setCategories((prev) => [...prev.filter((c) => c.id !== data.id), data]);
-          } else if (type === 'CATEGORY_DELETED') {
-            setCategories((prev) => prev.filter((c) => c.id !== data.categoryId));
-          } else if (type === 'HIGHLIGHT_CREATED') {
-            setHighlights((prev) => [...prev.filter((h) => h.id !== data.id), data]);
-          } else if (type === 'HIGHLIGHT_UPDATED') {
-            setHighlights((prev) => prev.map((h) => (h.id === data.id ? data : h)));
-          } else if (type === 'HIGHLIGHT_DELETED') {
-            setHighlights((prev) => prev.filter((h) => h.id !== data.highlightId));
-          } else if (type === 'COLLAB_CREATED') {
-            setCollaborations((prev) => [data, ...prev.filter((c) => c.id !== data.id)]);
-          } else if (type === 'COLLAB_UPDATED') {
-            setCollaborations((prev) => prev.map((c) => (c.id === data.id ? data : c)));
-          } else if (type === 'COLLAB_DELETED') {
-            setCollaborations((prev) => prev.filter((c) => c.id !== data.collabId));
-          } else if (type === 'COUPON_CREATED' || type === 'COUPON_UPDATED') {
-            setCoupons((prev) => {
-              const idx = prev.findIndex((c) => c.id === data.id);
-              if (idx >= 0) {
-                const updated = [...prev];
-                updated[idx] = data;
-                return updated;
-              }
-              return [data, ...prev];
-            });
-          } else if (type === 'COUPON_DELETED') {
-            setCoupons((prev) => prev.filter((c) => c.id !== data.couponId));
-          }
-        } catch (err) {
-          console.error('[Admin SSE Parse Error]:', err);
-        }
-      };
-
-      eventSource.onerror = () => {
-        setSseConnected(false);
-        if (eventSource) eventSource.close();
-        reconnectTimer = setTimeout(connectSSE, 3000);
-      };
+    const onFocus = () => fetchSyncData();
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') fetchSyncData();
     };
 
-    connectSSE();
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+
+    // If running in local development, also attach SSE stream for instant local pushes
+    let eventSource: EventSource | null = null;
+    const isLocal = typeof window !== 'undefined' && 
+      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+    if (isLocal) {
+      try {
+        eventSource = new EventSource(`${BACKEND_URL}/api/stream`);
+        eventSource.onopen = () => setSseConnected(true);
+        eventSource.onmessage = () => {
+          fetchSyncData();
+        };
+      } catch {}
+    }
 
     return () => {
+      clearInterval(intervalTimer);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
       if (eventSource) eventSource.close();
-      if (reconnectTimer) clearTimeout(reconnectTimer);
     };
-  }, []);
+  }, [fetchSyncData]);
 
   // --- Notification Actions ---
   const markEventsRead = useCallback(async () => {
     setUnreadEventsCount(0);
     setAlerts((prev) => prev.map((a) => ({ ...a, read: true })));
     await fetch(`${BACKEND_URL}/api/notifications/mark-read`, { method: 'POST' }).catch(() => {});
-  }, []);
+    fetchSyncData();
+  }, [fetchSyncData]);
 
   const clearAlerts = useCallback(async () => {
     setAlerts([]);
     setUnreadEventsCount(0);
     await fetch(`${BACKEND_URL}/api/notifications`, { method: 'DELETE' }).catch(() => {});
-  }, []);
+    fetchSyncData();
+  }, [fetchSyncData]);
 
   const archiveAlert = useCallback(async (id: string, archived = true) => {
     setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, archived } : a)));
@@ -458,11 +373,12 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ archived })
       });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   const bulkArchiveAlerts = useCallback(async (ids: string[], archived = true) => {
     const set = new Set(ids);
@@ -473,21 +389,23 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids, archived })
       });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   const deleteAlert = useCallback(async (id: string) => {
     setAlerts((prev) => prev.filter((a) => a.id !== id));
     try {
       const res = await fetch(`${BACKEND_URL}/api/notifications/${id}`, { method: 'DELETE' });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   const bulkDeleteAlerts = useCallback(async (ids: string[]) => {
     const set = new Set(ids);
@@ -498,11 +416,12 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids })
       });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   // --- Product Actions ---
   const adjustStock = useCallback(async (productId: string, deltaOrQuantity: number, isAbsolute = false) => {
@@ -512,11 +431,12 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(isAbsolute ? { quantity: deltaOrQuantity } : { delta: deltaOrQuantity })
       });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   const addProduct = useCallback(async (productData: Partial<Product>) => {
     try {
@@ -525,11 +445,12 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(productData)
       });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   const updateProduct = useCallback(async (productId: string, updates: Partial<Product>) => {
     try {
@@ -538,21 +459,23 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates)
       });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   const deleteProduct = useCallback(async (productId: string) => {
     setProducts((prev) => prev.filter((p) => p.id !== productId));
     try {
       const res = await fetch(`${BACKEND_URL}/api/products/${productId}`, { method: 'DELETE' });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   const bulkDeleteProducts = useCallback(async (ids: string[]) => {
     const set = new Set(ids);
@@ -563,11 +486,12 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids })
       });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   const uploadImage = useCallback(async (file: File) => {
     try {
@@ -593,21 +517,23 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
         body: JSON.stringify({ name })
       });
       const data = await res.json();
+      if (data.success) fetchSyncData();
       return data.success ? data.data : null;
     } catch {
       return null;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   const deleteCategory = useCallback(async (id: string) => {
     setCategories((prev) => prev.filter((c) => c.id !== id));
     try {
       const res = await fetch(`${BACKEND_URL}/api/categories/${id}`, { method: 'DELETE' });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   // --- Highlights Actions ---
   const createHighlight = useCallback(async (data: Partial<Highlight>) => {
@@ -617,11 +543,12 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
       });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   const updateHighlight = useCallback(async (id: string, data: Partial<Highlight>) => {
     try {
@@ -630,21 +557,23 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
       });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   const deleteHighlight = useCallback(async (id: string) => {
     setHighlights((prev) => prev.filter((h) => h.id !== id));
     try {
       const res = await fetch(`${BACKEND_URL}/api/highlights/${id}`, { method: 'DELETE' });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   // --- Collaborations Actions ---
   const createCollaboration = useCallback(async (data: Partial<Collaboration>) => {
@@ -654,11 +583,12 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
       });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   const updateCollaboration = useCallback(async (id: string, data: Partial<Collaboration>) => {
     try {
@@ -667,21 +597,23 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
       });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   const deleteCollaboration = useCallback(async (id: string) => {
     setCollaborations((prev) => prev.filter((c) => c.id !== id));
     try {
       const res = await fetch(`${BACKEND_URL}/api/collaborations/${id}`, { method: 'DELETE' });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   // --- Coupon Actions ---
   const createCoupon = useCallback(async (couponData: Partial<Coupon>) => {
@@ -691,11 +623,12 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(couponData)
       });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   const updateCoupon = useCallback(async (couponId: string, updates: Partial<Coupon>) => {
     try {
@@ -704,21 +637,23 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates)
       });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   const deleteCoupon = useCallback(async (couponId: string) => {
     setCoupons((prev) => prev.filter((c) => c.id !== couponId));
     try {
       const res = await fetch(`${BACKEND_URL}/api/coupons/${couponId}`, { method: 'DELETE' });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   const bulkDeleteCoupons = useCallback(async (ids: string[]) => {
     const set = new Set(ids);
@@ -726,8 +661,9 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
     for (const id of ids) {
       await fetch(`${BACKEND_URL}/api/coupons/${id}`, { method: 'DELETE' }).catch(() => {});
     }
+    fetchSyncData();
     return true;
-  }, []);
+  }, [fetchSyncData]);
 
   // --- Order Actions ---
   const updateOrderStatus = useCallback(async (orderId: string, status: Order['status'], customMessage?: string) => {
@@ -737,21 +673,23 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status, statusMessage: customMessage })
       });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   const deleteOrder = useCallback(async (orderId: string) => {
     setOrders((prev) => prev.filter((o) => o.id !== orderId));
     try {
       const res = await fetch(`${BACKEND_URL}/api/orders/${orderId}`, { method: 'DELETE' });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   const bulkDeleteOrders = useCallback(async (ids: string[]) => {
     const set = new Set(ids);
@@ -762,11 +700,12 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids })
       });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   const archiveOrder = useCallback(async (orderId: string, archived = true) => {
     setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, archived } : o)));
@@ -776,11 +715,12 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ archived })
       });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   const bulkArchiveOrders = useCallback(async (ids: string[], archived = true) => {
     const set = new Set(ids);
@@ -791,22 +731,24 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids, archived })
       });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   // --- Bag Event Actions ---
   const deleteBagEvent = useCallback(async (id: string) => {
     setBagEvents((prev) => prev.filter((b) => b.id !== id));
     try {
       const res = await fetch(`${BACKEND_URL}/api/bag-events/${id}`, { method: 'DELETE' });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   const bulkDeleteBagEvents = useCallback(async (ids: string[]) => {
     const set = new Set(ids);
@@ -817,11 +759,12 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids })
       });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   const archiveBagEvent = useCallback(async (id: string, archived = true) => {
     setBagEvents((prev) => prev.map((b) => (b.id === id ? { ...b, archived } : b)));
@@ -831,11 +774,12 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ archived })
       });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   const bulkArchiveBagEvents = useCallback(async (ids: string[], archived = true) => {
     const set = new Set(ids);
@@ -846,11 +790,12 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids, archived })
       });
+      if (res.ok) fetchSyncData();
       return res.ok;
     } catch {
       return false;
     }
-  }, []);
+  }, [fetchSyncData]);
 
   // --- Analytics Calculations ---
   const totalInventoryCount = useMemo(() => {

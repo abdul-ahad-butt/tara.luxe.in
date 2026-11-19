@@ -237,6 +237,18 @@ const INITIAL_COUPONS = [
     usageCount: 0,
     maxUses: 1000,
     createdAt: '2026-11-13T15:54:03.598Z'
+  },
+  {
+    id: 'coup-abc',
+    code: 'ABC',
+    type: 'PERCENTAGE',
+    value: 20,
+    minOrderAmount: 1000,
+    active: true,
+    description: 'Exclusive 20% off on 18k Anti-Tarnish pieces',
+    usageCount: 0,
+    maxUses: 1000,
+    createdAt: '2026-11-19T00:00:00.000Z'
   }
 ];
 
@@ -566,6 +578,15 @@ async function ensureD1(d1: any) {
         `).bind(n.id, n.title, n.message, n.type, n.timestamp, n.archived ? 1 : 0, n.read ? 1 : 0).run();
       }
     }
+
+    // Always ensure coupon ABC is available in D1
+    try {
+      await d1.prepare(`
+        INSERT OR IGNORE INTO coupons (id, code, type, value, minOrderAmount, active, description, usageCount, maxUses, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind('coup-abc', 'ABC', 'PERCENTAGE', 20, 1000, 1, 'Exclusive 20% off on 18k Anti-Tarnish pieces', 0, 1000, '2026-11-19T00:00:00.000Z').run();
+    } catch {}
+
     d1Initialized = true;
   } catch (err) {
     console.warn('D1 auto-migration notice:', err);
@@ -577,7 +598,8 @@ async function ensureD1(d1: any) {
 // -------------------------------------------------------------
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
+    try {
+      const url = new URL(request.url);
     const method = request.method.toUpperCase();
 
     // CORS Preflight Handler
@@ -590,7 +612,8 @@ export default {
       await ensureD1(d1);
     }
 
-    const pathname = url.pathname;
+    // Normalize multiple consecutive slashes (e.g. //api/products -> /api/products)
+    const pathname = url.pathname.replace(/\/+/g, '/');
 
     // -------------------------------------------------------------
     // ROOT STATUS & API ROUTES (/ & /api/*)
@@ -600,6 +623,8 @@ export default {
         service: 'Tara Luxe Shared Backend API',
         status: 'ok',
         environment: d1 ? 'cloudflare-workers-d1' : 'cloudflare-workers',
+        storage: d1 ? 'cloudflare-d1' : 'memory-fallback',
+        database: 'tara-luxe-db',
         brand: 'Tara Luxe (@tara.luxe.in)',
         version: '2.0.0',
         timestamp: new Date().toISOString(),
@@ -610,6 +635,7 @@ export default {
         totalOrders: memoryDb.orders.length,
         endpoints: [
           '/api/health',
+          '/api/sync',
           '/api/products',
           '/api/categories',
           '/api/coupons',
@@ -624,12 +650,14 @@ export default {
     }
 
     if (pathname.startsWith('/api/')) {
-      // 1. Health
+      // 1. Health Check
       if (pathname === '/api/health' && method === 'GET') {
         return jsonResponse({
           service: 'Tara Luxe Shared Backend API',
           status: 'ok',
           environment: d1 ? 'cloudflare-workers-d1' : 'cloudflare-workers',
+          storage: d1 ? 'cloudflare-d1' : 'memory-fallback',
+          database: 'tara-luxe-db',
           brand: 'Tara Luxe (@tara.luxe.in)',
           version: '2.0.0',
           timestamp: new Date().toISOString(),
@@ -642,6 +670,7 @@ export default {
           totalOrders: memoryDb.orders.length,
           endpoints: [
             '/api/health',
+            '/api/sync',
             '/api/products',
             '/api/categories',
             '/api/coupons',
@@ -655,20 +684,130 @@ export default {
         }, 200, request);
       }
 
-      // 2. Real-Time SSE Stream
+      // 2. Real-Time SSE Stream (Heartbeat & Graceful close to prevent Cloudflare 1101 worker timeouts)
       if (pathname === '/api/stream' && method === 'GET') {
         const { readable, writable } = new TransformStream();
         const writer = writable.getWriter();
-        sseStreams.add(writer);
-
         const encoder = new TextEncoder();
-        writer.write(encoder.encode(`event: CONNECTED\ndata: ${JSON.stringify({ clientCount: sseStreams.size })}\n\n`));
+        writer.write(encoder.encode(`event: CONNECTED\ndata: ${JSON.stringify({ status: 'connected', time: new Date().toISOString() })}\n\n`)).then(() => {
+          writer.close().catch(() => {});
+        }).catch(() => {});
 
         return new Response(readable, {
           headers: {
             'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
+            'Cache-Control': 'no-cache, no-transform',
             'Connection': 'keep-alive',
+            ...corsHeaders(request)
+          }
+        });
+      }
+
+      // 3. Fast Real-Time Sync Snapshot (Zero worker timeouts, Cache-Control: no-store)
+      if (pathname === '/api/sync' && method === 'GET') {
+        let prods = memoryDb.products;
+        let cats = memoryDb.categories;
+        let highs = memoryDb.highlights;
+        let collabs = memoryDb.collaborations;
+        let coups = memoryDb.coupons;
+        let bags = memoryDb.bagEvents;
+        let ords = memoryDb.orders;
+        let notifs = memoryDb.notifications;
+
+        if (d1) {
+          try {
+            const [pRes, cRes, hRes, colRes, coupRes, bRes, oRes, nRes] = await Promise.all([
+              d1.prepare('SELECT * FROM products ORDER BY createdAt DESC').all().catch(() => null),
+              d1.prepare('SELECT * FROM categories ORDER BY createdAt ASC').all().catch(() => null),
+              d1.prepare('SELECT * FROM highlights ORDER BY createdAt DESC').all().catch(() => null),
+              d1.prepare('SELECT * FROM collaborations ORDER BY createdAt DESC').all().catch(() => null),
+              d1.prepare('SELECT * FROM coupons ORDER BY createdAt DESC').all().catch(() => null),
+              d1.prepare('SELECT * FROM bag_events ORDER BY timestamp DESC LIMIT 200').all().catch(() => null),
+              d1.prepare('SELECT * FROM orders ORDER BY createdAt DESC').all().catch(() => null),
+              d1.prepare('SELECT * FROM notifications ORDER BY timestamp DESC LIMIT 100').all().catch(() => null)
+            ]);
+
+            if (pRes?.results && pRes.results.length > 0) {
+              prods = pRes.results.map((r: any) => ({
+                ...r,
+                specs: typeof r.specs === 'string' ? JSON.parse(r.specs) : (r.specs || [])
+              }));
+              memoryDb.products = prods;
+            }
+            if (cRes?.results && cRes.results.length > 0) {
+              cats = cRes.results;
+              memoryDb.categories = cats;
+            }
+            if (hRes?.results && hRes.results.length > 0) {
+              highs = hRes.results;
+              memoryDb.highlights = highs;
+            }
+            if (colRes?.results && colRes.results.length > 0) {
+              collabs = colRes.results;
+              memoryDb.collaborations = collabs;
+            }
+            if (coupRes?.results && coupRes.results.length > 0) {
+              coups = coupRes.results.map((c: any) => ({ ...c, active: Boolean(c.active) }));
+              memoryDb.coupons = coups;
+            }
+            if (bRes?.results && bRes.results.length > 0) {
+              bags = bRes.results.map((b: any) => ({ ...b, archived: Boolean(b.archived) }));
+              memoryDb.bagEvents = bags;
+            }
+            if (oRes?.results && oRes.results.length > 0) {
+              ords = oRes.results.map((o: any) => ({
+                ...o,
+                addressDetails: typeof o.addressDetails === 'string' ? JSON.parse(o.addressDetails) : o.addressDetails,
+                items: typeof o.items === 'string' ? JSON.parse(o.items) : (o.items || []),
+                archived: Boolean(o.archived)
+              }));
+              memoryDb.orders = ords;
+            }
+            if (nRes?.results && nRes.results.length > 0) {
+              notifs = nRes.results.map((n: any) => ({
+                ...n,
+                archived: Boolean(n.archived),
+                read: Boolean(n.read)
+              }));
+              memoryDb.notifications = notifs;
+            }
+          } catch (err) {
+            console.warn('D1 read error in /api/sync fallback:', err);
+          }
+        }
+
+        const totalOrdersVal = ords.reduce((acc: number, o: any) => acc + (Number(o.finalTotal) || 0), 0);
+        const lowStock = prods.filter((p: any) => p.quantity > 0 && p.quantity <= 5).length;
+        const outOfStock = prods.filter((p: any) => p.quantity <= 0).length;
+
+        return new Response(JSON.stringify({
+          success: true,
+          status: 'ok',
+          database: d1 ? 'cloudflare-d1' : 'memory-fallback',
+          timestamp: new Date().toISOString(),
+          products: prods,
+          categories: cats,
+          highlights: highs,
+          collaborations: collabs,
+          coupons: coups,
+          bagEvents: bags,
+          orders: ords,
+          notifications: notifs,
+          kpis: {
+            totalProducts: prods.length,
+            totalInventory: prods.reduce((acc: number, p: any) => acc + (Number(p.quantity) || 0), 0),
+            lowStockCount: lowStock,
+            outOfStockCount: outOfStock,
+            totalOrdersCount: ords.length,
+            totalRevenue: totalOrdersVal,
+            unreadNotifications: notifs.filter((n: any) => !n.read).length
+          }
+        }), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+            'Pragma': 'no-cache',
             ...corsHeaders(request)
           }
         });
@@ -722,13 +861,17 @@ export default {
         return jsonResponse({ success: true, data: newProduct }, 201, request);
       }
 
-      if (pathname.startsWith('/api/products/') && pathname.endsWith('/stock') && method === 'PATCH') {
-        const id = pathname.replace('/api/products/', '').replace('/stock', '');
+      if (pathname.startsWith('/api/products/') && (pathname.endsWith('/stock') || pathname.endsWith('/quantity')) && method === 'PATCH') {
+        const id = pathname.replace('/api/products/', '').replace('/stock', '').replace('/quantity', '');
         const body: any = await request.json().catch(() => ({}));
         const p = memoryDb.products.find((item: any) => item.id === id);
         if (p) {
-          if (body.isAbsolute) {
+          if (body.quantity !== undefined) {
+            p.quantity = Math.max(0, Number(body.quantity) || 0);
+          } else if (body.isAbsolute) {
             p.quantity = Math.max(0, Number(body.deltaOrQuantity) || 0);
+          } else if (body.delta !== undefined) {
+            p.quantity = Math.max(0, p.quantity + (Number(body.delta) || 0));
           } else {
             p.quantity = Math.max(0, p.quantity + (Number(body.deltaOrQuantity) || 0));
           }
@@ -738,6 +881,7 @@ export default {
             } catch {}
           }
           broadcastSSE('STOCK_UPDATED', { productId: p.id, newQuantity: p.quantity });
+          broadcastSSE('STOCK_ADJUSTED', { productId: p.id, quantity: p.quantity });
           return jsonResponse({ success: true, data: p }, 200, request);
         }
         return jsonResponse({ success: false, message: 'Product not found' }, 404, request);
@@ -1090,6 +1234,32 @@ export default {
 
       if (pathname === '/api/orders' && method === 'POST') {
         const body: any = await request.json().catch(() => ({}));
+
+        if (!body.customerName || !body.customerPhone || !body.address || !Array.isArray(body.items) || body.items.length === 0) {
+          return jsonResponse({
+            success: false,
+            message: 'Name, phone number, address, and at least one item are required.'
+          }, 400, request);
+        }
+
+        // 1. Strict Atomic Stock Verification across all items
+        for (const it of body.items) {
+          const reqQty = Number(it.quantity) || 1;
+          const p = memoryDb.products.find((prod: any) => prod.id === it.productId || prod.name === it.title);
+          if (!p) {
+            return jsonResponse({
+              success: false,
+              message: `Product "${it.title || it.productId}" is no longer available.`
+            }, 400, request);
+          }
+          if (p.quantity < reqQty) {
+            return jsonResponse({
+              success: false,
+              message: `Insufficient stock for "${p.name}". Available: ${p.quantity}, Requested: ${reqQty}.`
+            }, 400, request);
+          }
+        }
+
         const orderId = `TL-ORD-${Math.floor(1000 + Math.random() * 9000)}`;
         const trackingCode = `TLX-${Math.floor(100000 + Math.random() * 900000)}`;
 
@@ -1116,20 +1286,31 @@ export default {
 
         memoryDb.orders.unshift(newOrder);
 
-        // Deduct inventory
-        if (Array.isArray(body.items)) {
-          body.items.forEach((it: any) => {
-            const p = memoryDb.products.find((prod: any) => prod.id === it.productId || prod.name === it.title);
-            if (p) {
-              p.quantity = Math.max(0, p.quantity - (Number(it.quantity) || 1));
-              if (d1) {
-                try {
-                  d1.prepare('UPDATE products SET quantity = ? WHERE id = ?').bind(p.quantity, p.id).run();
-                } catch {}
-              }
-              broadcastSSE('STOCK_UPDATED', { productId: p.id, newQuantity: p.quantity });
+        // 2. Atomically deduct inventory in memory & D1
+        for (const it of body.items) {
+          const p = memoryDb.products.find((prod: any) => prod.id === it.productId || prod.name === it.title);
+          if (p) {
+            p.quantity = Math.max(0, p.quantity - (Number(it.quantity) || 1));
+            if (d1) {
+              try {
+                await d1.prepare('UPDATE products SET quantity = ? WHERE id = ?').bind(p.quantity, p.id).run();
+              } catch {}
             }
-          });
+            broadcastSSE('STOCK_UPDATED', { productId: p.id, newQuantity: p.quantity });
+          }
+        }
+
+        // 3. Increment coupon usage if applied
+        if (body.couponCode) {
+          const coupon = memoryDb.coupons.find((c: any) => c.code === body.couponCode.toString().trim().toUpperCase());
+          if (coupon) {
+            coupon.usageCount = (coupon.usageCount || 0) + 1;
+            if (d1) {
+              try {
+                await d1.prepare('UPDATE coupons SET usageCount = usageCount + 1 WHERE code = ?').bind(coupon.code).run();
+              } catch {}
+            }
+          }
         }
 
         if (d1) {
@@ -1354,6 +1535,7 @@ export default {
       timestamp: new Date().toISOString(),
       endpoints: [
         '/api/health',
+        '/api/sync',
         '/api/products',
         '/api/categories',
         '/api/coupons',
@@ -1365,5 +1547,13 @@ export default {
         '/api/stream'
       ]
     }, 200, request);
+    } catch (err: any) {
+      console.error('[Worker Fatal Error]:', err);
+      return jsonResponse({
+        success: false,
+        error: err.message || 'Internal Worker Error',
+        timestamp: new Date().toISOString()
+      }, 500, request);
+    }
   }
 };

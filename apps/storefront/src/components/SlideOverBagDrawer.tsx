@@ -43,6 +43,8 @@ export const SlideOverBagDrawer: React.FC = () => {
   const [paymentMode, setPaymentMode] = useState<'COD' | 'UPI' | 'WHATSAPP'>('COD');
   const [formError, setFormError] = useState<string | null>(null);
 
+  const hasStockDeficit = bag.some((i) => i.product.quantity <= 0 || i.quantity > i.product.quantity);
+
   if (!isBagOpen) return null;
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -77,6 +79,11 @@ export const SlideOverBagDrawer: React.FC = () => {
   const handleOrderSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
+
+    if (hasStockDeficit) {
+      setFormError('Some pieces in your bag exceed currently available stock. Please adjust quantities to available levels before confirming your order.');
+      return;
+    }
 
     if (!customerName.trim()) {
       setFormError('Please enter your full customer name.');
@@ -441,61 +448,114 @@ export const SlideOverBagDrawer: React.FC = () => {
             ) : (
               /* Bag Items List View */
               <>
+                {hasStockDeficit && (
+                  <div className="p-3.5 rounded-2xl bg-ruby-stock/20 border border-ruby-stock/40 text-ruby-stock text-xs flex items-center gap-2.5">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                    <span>Live Stock Alert: Some pieces exceed current inventory. Please adjust quantities below to proceed.</span>
+                  </div>
+                )}
+
                 <div className="space-y-4">
-                  {bag.map((item) => (
-                    <div
-                      key={item.productId}
-                      className="p-3.5 rounded-2xl bg-obsidian/70 border border-gold/15 flex items-center gap-3.5 relative"
-                    >
-                      <LuxuryImage
-                        src={item.product.imageUrl}
-                        alt={item.product.name}
-                        className="w-16 h-16 rounded-xl object-cover bg-espresso flex-shrink-0"
-                      />
+                  {bag.map((item) => {
+                    const available = item.product.quantity;
+                    const isOutOfStock = available <= 0;
+                    const isOverOrdered = item.quantity > available && available > 0;
+                    const excess = isOverOrdered ? item.quantity - available : 0;
 
-                      <div className="flex-1 min-w-0">
-                        <h4 className="text-xs font-serif font-bold text-ivory truncate">
-                          {item.product.name}
-                        </h4>
-                        <div className="text-[11px] font-mono text-gold mt-0.5">
-                          ₹{item.product.price.toLocaleString('en-IN')}
-                        </div>
-                        <div className="text-[10px] text-ivory/50 mt-0.5">
-                          In stock: {item.product.quantity}
+                    return (
+                      <div
+                        key={item.productId}
+                        className={`p-3.5 rounded-2xl bg-obsidian/70 border flex flex-col gap-3 relative transition-all ${
+                          isOutOfStock || isOverOrdered ? 'border-ruby-stock/50 bg-ruby-stock/5' : 'border-gold/15'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3.5">
+                          <LuxuryImage
+                            src={item.product.imageUrl}
+                            alt={item.product.name}
+                            className="w-16 h-16 rounded-xl object-cover bg-espresso flex-shrink-0"
+                          />
+
+                          <div className="flex-1 min-w-0">
+                            <h4 className="text-xs font-serif font-bold text-ivory truncate">
+                              {item.product.name}
+                            </h4>
+                            <div className="text-[11px] font-mono text-gold mt-0.5">
+                              ₹{item.product.price.toLocaleString('en-IN')}
+                            </div>
+                            <div className="text-[10px] text-ivory/50 mt-0.5 flex items-center gap-2">
+                              <span>In stock: {available}</span>
+                              {isOutOfStock && (
+                                <span className="px-1.5 py-0.2 rounded bg-ruby-stock/20 text-ruby-stock text-[9px] font-mono font-bold">
+                                  Out of stock
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Quantity Counter */}
+                            <div className="flex items-center gap-2 mt-2">
+                              <div className="flex items-center bg-espresso rounded-lg border border-gold/30">
+                                <button
+                                  onClick={() => updateBagQuantity(item.productId, -1)}
+                                  className="p-1 hover:text-gold transition-colors text-ivory/80"
+                                >
+                                  <Minus className="w-3 h-3" />
+                                </button>
+                                <span className={`px-2 text-xs font-mono font-bold ${isOverOrdered ? 'text-ruby-stock' : 'text-gold'}`}>
+                                  {item.quantity}
+                                </span>
+                                <button
+                                  disabled={item.quantity >= available}
+                                  onClick={() => updateBagQuantity(item.productId, 1)}
+                                  className="p-1 hover:text-gold transition-colors text-ivory/80 disabled:opacity-30 disabled:cursor-not-allowed"
+                                >
+                                  <Plus className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+
+                          <button
+                            onClick={() => removeFromBag(item.productId)}
+                            className="p-2 text-ivory/40 hover:text-ruby-stock transition-colors self-start"
+                            title="Remove piece"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                         </div>
 
-                        {/* Quantity Counter */}
-                        <div className="flex items-center gap-2 mt-2">
-                          <div className="flex items-center bg-espresso rounded-lg border border-gold/30">
+                        {/* Over-order Warning Banner with 1-click 'Adjust to Available' button */}
+                        {isOverOrdered && (
+                          <div className="p-2.5 rounded-xl bg-ruby-stock/15 border border-ruby-stock/30 text-xs space-y-1.5">
+                            <p className="text-[11px] text-ruby-stock flex items-center gap-1.5 leading-snug">
+                              <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                              <span>Only {available} unit(s) left in stock for {item.product.name}. Please reduce your quantity by {excess} unit(s) to proceed, otherwise this item is out of stock.</span>
+                            </p>
                             <button
-                              onClick={() => updateBagQuantity(item.productId, -1)}
-                              className="p-1 hover:text-gold transition-colors text-ivory/80"
+                              type="button"
+                              onClick={() => updateBagQuantity(item.productId, available - item.quantity)}
+                              className="px-2.5 py-1 rounded-lg bg-ruby-stock/25 hover:bg-ruby-stock/40 text-ruby-stock border border-ruby-stock/50 text-[10px] font-bold font-mono transition-all"
                             >
-                              <Minus className="w-3 h-3" />
-                            </button>
-                            <span className="px-2 text-xs font-mono font-bold text-gold">
-                              {item.quantity}
-                            </span>
-                            <button
-                              disabled={item.quantity >= item.product.quantity}
-                              onClick={() => updateBagQuantity(item.productId, 1)}
-                              className="p-1 hover:text-gold transition-colors text-ivory/80 disabled:opacity-30 disabled:cursor-not-allowed"
-                            >
-                              <Plus className="w-3 h-3" />
+                              Adjust to {available} Available
                             </button>
                           </div>
-                        </div>
-                      </div>
+                        )}
 
-                      <button
-                        onClick={() => removeFromBag(item.productId)}
-                        className="p-2 text-ivory/40 hover:text-ruby-stock transition-colors self-start"
-                        title="Remove piece"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ))}
+                        {isOutOfStock && (
+                          <div className="p-2.5 rounded-xl bg-ruby-stock/15 border border-ruby-stock/30 text-[11px] text-ruby-stock flex items-center justify-between">
+                            <span>Piece is sold out. Please remove to continue.</span>
+                            <button
+                              type="button"
+                              onClick={() => removeFromBag(item.productId)}
+                              className="text-[10px] font-bold underline font-mono"
+                            >
+                              Remove Piece
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
 
                 {/* Optional Discount Coupon Section */}
@@ -600,9 +660,14 @@ export const SlideOverBagDrawer: React.FC = () => {
               {!showCheckoutForm && (
                 <button
                   onClick={() => setShowCheckoutForm(true)}
-                  className="w-full py-3.5 rounded-xl bg-gradient-to-r from-gold-brushed to-gold hover:from-gold hover:to-gold-light text-obsidian font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-gold-glow transition-all"
+                  disabled={hasStockDeficit}
+                  className={`w-full py-3.5 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
+                    hasStockDeficit
+                      ? 'bg-espresso border border-ruby-stock/40 text-ruby-stock cursor-not-allowed opacity-60'
+                      : 'bg-gradient-to-r from-gold-brushed to-gold hover:from-gold hover:to-gold-light text-obsidian shadow-gold-glow'
+                  }`}
                 >
-                  <span>Proceed to Checkout</span>
+                  <span>{hasStockDeficit ? 'Adjust Quantities to Proceed' : 'Proceed to Checkout'}</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
               )}
