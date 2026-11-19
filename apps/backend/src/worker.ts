@@ -285,21 +285,23 @@ function broadcastSSE(type: string, data: any) {
 }
 
 // Helpers
-function corsHeaders(): Record<string, string> {
+function corsHeaders(request?: Request): Record<string, string> {
+  const origin = request ? (request.headers.get('Origin') || '*') : '*';
   return {
-    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Origin': origin === 'null' ? '*' : origin,
     'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    'Access-Control-Max-Age': '86400'
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With',
+    'Access-Control-Max-Age': '86400',
+    'Vary': 'Origin'
   };
 }
 
-function jsonResponse(data: any, status = 200): Response {
+function jsonResponse(data: any, status = 200, request?: Request): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
       'Content-Type': 'application/json',
-      ...corsHeaders()
+      ...corsHeaders(request)
     }
   });
 }
@@ -311,7 +313,7 @@ export default {
 
     // CORS Preflight
     if (method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: corsHeaders() });
+      return new Response(null, { status: 204, headers: corsHeaders(request) });
     }
 
     const pathname = url.pathname;
@@ -352,7 +354,7 @@ export default {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive',
-            ...corsHeaders()
+            ...corsHeaders(request)
           }
         });
       }
@@ -695,7 +697,7 @@ export default {
 
     return new Response('Tara Luxe Cloudflare Worker Online', {
       status: 200,
-      headers: { 'Content-Type': 'text/plain', ...corsHeaders() }
+      headers: { 'Content-Type': 'text/plain', ...corsHeaders(request) }
     });
   }
 };

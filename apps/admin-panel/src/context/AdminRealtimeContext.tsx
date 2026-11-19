@@ -199,10 +199,10 @@ interface AdminContextType {
 
 const getBackendUrl = (): string => {
   if (import.meta.env.VITE_API_URL) {
-    return import.meta.env.VITE_API_URL;
+    return (import.meta.env.VITE_API_URL as string).replace(/\/+$/, '');
   }
   if (typeof window !== 'undefined') {
-    const { hostname, origin } = window.location;
+    const { hostname } = window.location;
     if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.')) {
       return 'http://localhost:8787';
     }
