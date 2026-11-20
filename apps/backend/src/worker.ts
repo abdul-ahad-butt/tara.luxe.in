@@ -411,10 +411,11 @@ function broadcastSSE(type: string, data: any) {
 // CORS Helper (Allows *.pages.dev, *.workers.dev, localhost, and custom domains)
 function corsHeaders(request?: Request): Record<string, string> {
   const origin = request ? (request.headers.get('Origin') || '*') : '*';
+  const reqHeaders = request?.headers.get('Access-Control-Request-Headers');
   return {
     'Access-Control-Allow-Origin': origin === 'null' ? '*' : origin,
     'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With',
+    'Access-Control-Allow-Headers': reqHeaders ? `${reqHeaders}, Content-Type, Authorization, X-Requested-With, Cache-Control, Pragma` : 'Content-Type, Authorization, X-Requested-With, Cache-Control, Pragma, *',
     'Access-Control-Max-Age': '86400',
     'Vary': 'Origin'
   };
@@ -781,10 +782,12 @@ export default {
         const outOfStock = prods.filter((p: any) => p.quantity <= 0).length;
 
         return new Response(JSON.stringify({
+          ok: true,
           success: true,
           status: 'ok',
           database: d1 ? 'cloudflare-d1' : 'memory-fallback',
           timestamp: new Date().toISOString(),
+          serverTime: new Date().toISOString(),
           products: prods,
           categories: cats,
           highlights: highs,
