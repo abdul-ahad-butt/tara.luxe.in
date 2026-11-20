@@ -5,6 +5,7 @@ import { LiveBagFeedView } from './components/LiveBagFeedView';
 import { ProductManagerView } from './components/ProductManagerView';
 import { CouponManagerView } from './components/CouponManagerView';
 import { HighlightsCollabManagerView } from './components/HighlightsCollabManagerView';
+import { PaymentsDeliveryView } from './components/PaymentsDeliveryView';
 import { ExecutiveAnalyticsView } from './components/ExecutiveAnalyticsView';
 import { NotificationPanel } from './components/NotificationPanel';
 import { AdminLoginGate } from './components/AdminLoginGate';
@@ -12,7 +13,7 @@ import { BrandLogo } from './components/BrandLogo';
 import { Bell, Menu, X, ExternalLink } from 'lucide-react';
 
 const AdminDashboardContent: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'live-feed' | 'products' | 'coupons' | 'highlights-collabs' | 'overview'>('live-feed');
+  const [activeTab, setActiveTab] = useState<'live-feed' | 'products' | 'coupons' | 'highlights-collabs' | 'payments-delivery' | 'overview'>('live-feed');
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [showAlertsDropdown, setShowAlertsDropdown] = useState(false);
 
@@ -143,6 +144,7 @@ const AdminDashboardContent: React.FC = () => {
           {activeTab === 'products' && <ProductManagerView />}
           {activeTab === 'highlights-collabs' && <HighlightsCollabManagerView />}
           {activeTab === 'coupons' && <CouponManagerView />}
+          {activeTab === 'payments-delivery' && <PaymentsDeliveryView />}
           {activeTab === 'overview' && <ExecutiveAnalyticsView />}
         </main>
       </div>

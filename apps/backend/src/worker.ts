@@ -379,6 +379,42 @@ const INITIAL_NOTIFICATIONS = [
   }
 ];
 
+export interface StoreSettings {
+  codEnabled: boolean;
+  upiEnabled: boolean;
+  whatsappEnabled: boolean;
+  defaultDeliveryFee: number;
+  freeDeliveryAbove: number;
+  deliveryNote: string;
+  upiId: string;
+  upiPayeeName: string;
+  upiQrImageUrl: string;
+  bankName: string;
+  bankAccountName: string;
+  bankAccountNumber: string;
+  bankIfsc: string;
+  whatsappNumber: string;
+  whatsappMessagePrefix: string;
+}
+
+const DEFAULT_SETTINGS: StoreSettings = {
+  codEnabled: true,
+  upiEnabled: true,
+  whatsappEnabled: true,
+  defaultDeliveryFee: 0,
+  freeDeliveryAbove: 999,
+  deliveryNote: 'Free festive delivery on standard orders. Out-of-zone or express COD orders may include an extra delivery charge confirmed during Pending review.',
+  upiId: 'taraluxe@upi',
+  upiPayeeName: 'Tara Luxe Anti-Tarnish Jewellery',
+  upiQrImageUrl: '',
+  bankName: '',
+  bankAccountName: 'Tara Luxe',
+  bankAccountNumber: '',
+  bankIfsc: '',
+  whatsappNumber: '917871501939',
+  whatsappMessagePrefix: 'Hi Tara Luxe! I just placed an order on your website:'
+};
+
 // Global In-Memory Fallback Store (Instant startup, 0 cold-start latency)
 const memoryDb: any = {
   products: [...INITIAL_PRODUCTS],
@@ -388,7 +424,8 @@ const memoryDb: any = {
   collaborations: [...INITIAL_COLLABORATIONS],
   orders: [...INITIAL_ORDERS],
   bagEvents: [],
-  notifications: [...INITIAL_NOTIFICATIONS]
+  notifications: [...INITIAL_NOTIFICATIONS],
+  settings: { ...DEFAULT_SETTINGS }
 };
 
 // Global SSE Stream Writers
@@ -504,12 +541,23 @@ async function ensureD1(d1: any) {
         subtotal REAL,
         discount REAL,
         finalTotal REAL,
+        payableTotal REAL,
+        deliveryFee REAL DEFAULT 0,
+        extraDeliveryFee REAL DEFAULT 0,
+        deliveryFeeStatus TEXT DEFAULT 'FREE',
+        deliveryFeeNote TEXT DEFAULT '',
+        upiTransactionRef TEXT DEFAULT '',
         status TEXT,
         statusMessage TEXT,
         whatsAppUrl TEXT,
         createdAt TEXT,
         updatedAt TEXT,
         archived INTEGER DEFAULT 0
+      );
+      CREATE TABLE IF NOT EXISTS store_settings (
+        id TEXT PRIMARY KEY,
+        settings TEXT,
+        updatedAt TEXT
       );
       CREATE TABLE IF NOT EXISTS bag_events (
         id TEXT PRIMARY KEY,
@@ -587,6 +635,31 @@ async function ensureD1(d1: any) {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind('coup-abc', 'ABC', 'PERCENTAGE', 20, 1000, 1, 'Exclusive 20% off on 18k Anti-Tarnish pieces', 0, 1000, '2026-11-19T00:00:00.000Z').run();
     } catch {}
+
+    // Safe migration: Add delivery and payment columns if missing from earlier D1 tables
+    try {
+      await d1.exec(`
+        ALTER TABLE orders ADD COLUMN payableTotal REAL;
+        ALTER TABLE orders ADD COLUMN deliveryFee REAL DEFAULT 0;
+        ALTER TABLE orders ADD COLUMN extraDeliveryFee REAL DEFAULT 0;
+        ALTER TABLE orders ADD COLUMN deliveryFeeStatus TEXT DEFAULT 'FREE';
+        ALTER TABLE orders ADD COLUMN deliveryFeeNote TEXT DEFAULT '';
+        ALTER TABLE orders ADD COLUMN upiTransactionRef TEXT DEFAULT '';
+      `);
+    } catch {}
+
+    // Load or seed store_settings
+    try {
+      const sRow = await d1.prepare("SELECT settings FROM store_settings WHERE id = 'payments_delivery'").first().catch(() => null);
+      if (sRow?.settings) {
+        memoryDb.settings = { ...DEFAULT_SETTINGS, ...JSON.parse(sRow.settings as string) };
+      } else {
+        await d1.prepare("INSERT OR REPLACE INTO store_settings (id, settings, updatedAt) VALUES ('payments_delivery', ?, ?)")
+          .bind(JSON.stringify(DEFAULT_SETTINGS), new Date().toISOString()).run().catch(() => {});
+      }
+    } catch (e) {
+      console.warn('store_settings D1 check notice:', e);
+    }
 
     d1Initialized = true;
   } catch (err) {
@@ -717,7 +790,7 @@ export default {
 
         if (d1) {
           try {
-            const [pRes, cRes, hRes, colRes, coupRes, bRes, oRes, nRes] = await Promise.all([
+            const [pRes, cRes, hRes, colRes, coupRes, bRes, oRes, nRes, sRes] = await Promise.all([
               d1.prepare('SELECT * FROM products ORDER BY createdAt DESC').all().catch(() => null),
               d1.prepare('SELECT * FROM categories ORDER BY createdAt ASC').all().catch(() => null),
               d1.prepare('SELECT * FROM highlights ORDER BY createdAt DESC').all().catch(() => null),
@@ -725,7 +798,8 @@ export default {
               d1.prepare('SELECT * FROM coupons ORDER BY createdAt DESC').all().catch(() => null),
               d1.prepare('SELECT * FROM bag_events ORDER BY timestamp DESC LIMIT 200').all().catch(() => null),
               d1.prepare('SELECT * FROM orders ORDER BY createdAt DESC').all().catch(() => null),
-              d1.prepare('SELECT * FROM notifications ORDER BY timestamp DESC LIMIT 100').all().catch(() => null)
+              d1.prepare('SELECT * FROM notifications ORDER BY timestamp DESC LIMIT 100').all().catch(() => null),
+              d1.prepare("SELECT settings FROM store_settings WHERE id = 'payments_delivery'").first().catch(() => null)
             ]);
 
             if (pRes?.results && pRes.results.length > 0) {
@@ -772,6 +846,11 @@ export default {
               }));
               memoryDb.notifications = notifs;
             }
+            if (sRes?.settings) {
+              try {
+                memoryDb.settings = { ...DEFAULT_SETTINGS, ...JSON.parse(sRes.settings as string) };
+              } catch {}
+            }
           } catch (err) {
             console.warn('D1 read error in /api/sync fallback:', err);
           }
@@ -797,6 +876,7 @@ export default {
           bagEvents: bags,
           orders: ords,
           notifications: notifs,
+          settings: memoryDb.settings || DEFAULT_SETTINGS,
           kpis: {
             totalProducts: prods.length,
             totalInventory: prods.reduce((acc: number, p: any) => acc + (Number(p.quantity) || 0), 0),
@@ -815,6 +895,40 @@ export default {
             ...corsHeaders(request)
           }
         });
+      }
+
+      // Store Settings (Payments, Delivery, Bank, WhatsApp)
+      if (pathname === '/api/settings' && method === 'GET') {
+        if (d1) {
+          try {
+            const sRow = await d1.prepare("SELECT settings FROM store_settings WHERE id = 'payments_delivery'").first().catch(() => null);
+            if (sRow?.settings) {
+              memoryDb.settings = { ...DEFAULT_SETTINGS, ...JSON.parse(sRow.settings as string) };
+            }
+          } catch {}
+        }
+        return jsonResponse({ success: true, settings: memoryDb.settings || DEFAULT_SETTINGS }, 200, request);
+      }
+
+      if ((pathname === '/api/settings' || pathname === '/api/settings/payments') && (method === 'PUT' || method === 'PATCH' || method === 'POST')) {
+        const body: any = await request.json().catch(() => ({}));
+        const updated = {
+          ...DEFAULT_SETTINGS,
+          ...memoryDb.settings,
+          ...body
+        };
+        memoryDb.settings = updated;
+        const now = new Date().toISOString();
+        if (d1) {
+          try {
+            await d1.prepare("INSERT OR REPLACE INTO store_settings (id, settings, updatedAt) VALUES ('payments_delivery', ?, ?)")
+              .bind(JSON.stringify(updated), now).run();
+          } catch (err) {
+            console.warn('D1 store_settings update notice:', err);
+          }
+        }
+        broadcastSSE('SETTINGS_UPDATED', updated);
+        return jsonResponse({ success: true, settings: updated, message: 'Settings saved successfully' }, 200, request);
       }
 
       // 3. Products
@@ -1264,8 +1378,28 @@ export default {
           }
         }
 
+        const settings = memoryDb.settings || DEFAULT_SETTINGS;
+        const subtotal = Number(body.subtotal) || 0;
+        const discount = Number(body.discount) || 0;
+        const baseTotal = Math.max(0, subtotal - discount);
+        const freeAbove = Number(settings.freeDeliveryAbove) || 999;
+        const standardFee = baseTotal >= freeAbove ? 0 : (Number(settings.defaultDeliveryFee) || 0);
+
+        const deliveryFee = body.deliveryFee !== undefined ? Number(body.deliveryFee) : standardFee;
+        const extraDeliveryFee = Number(body.extraDeliveryFee) || 0;
+        const deliveryFeeStatus = body.deliveryFeeStatus || (deliveryFee + extraDeliveryFee === 0 ? 'FREE' : (body.paymentMode === 'COD' ? 'DUE_ON_COD' : 'PENDING_CONFIRMATION'));
+        const deliveryFeeNote = body.deliveryFeeNote || (deliveryFee + extraDeliveryFee === 0 ? 'Free standard delivery' : (settings.deliveryNote || ''));
+        const upiTransactionRef = body.upiTransactionRef ? String(body.upiTransactionRef).trim() : '';
+        const payableTotal = Math.max(0, subtotal - discount + deliveryFee + extraDeliveryFee);
+
         const orderId = `TL-ORD-${Math.floor(1000 + Math.random() * 9000)}`;
         const trackingCode = `TLX-${Math.floor(100000 + Math.random() * 900000)}`;
+
+        const adminWhatsApp = (settings.whatsappNumber || '917871501939').replace(/\D/g, '');
+        const msgPrefix = settings.whatsappMessagePrefix || 'Hi Tara Luxe! I just placed an order on your website:';
+        const itemsSummary = (body.items || []).map((it: any) => `${it.title} (x${it.quantity})`).join(', ');
+        const whatsappText = encodeURIComponent(`${msgPrefix}\n\n*Order ID:* ${orderId}\n*Tracking Code:* ${trackingCode}\n*Items:* ${itemsSummary}\n*Total Payable:* ₹${payableTotal}\n*Payment Mode:* ${body.paymentMode || 'COD'}\n*Delivery Status:* ${deliveryFeeStatus}\n\nPlease confirm my order!`);
+        const whatsAppUrl = `https://wa.me/${adminWhatsApp}?text=${whatsappText}`;
 
         const newOrder = {
           id: orderId,
@@ -1277,12 +1411,18 @@ export default {
           paymentMode: body.paymentMode || 'COD',
           items: body.items || [],
           couponCode: body.couponCode || null,
-          subtotal: Number(body.subtotal) || 0,
-          discount: Number(body.discount) || 0,
-          finalTotal: Number(body.finalTotal) || 0,
+          subtotal,
+          discount,
+          finalTotal: payableTotal,
+          payableTotal,
+          deliveryFee,
+          extraDeliveryFee,
+          deliveryFeeStatus,
+          deliveryFeeNote,
+          upiTransactionRef,
           status: 'Pending',
           statusMessage: 'Your order request is Pending Admin Approval',
-          whatsAppUrl: `https://wa.me/message/U5MPAWAN3UPFM1?text=Order%20${trackingCode}`,
+          whatsAppUrl,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           archived: false
@@ -1320,10 +1460,17 @@ export default {
         if (d1) {
           try {
             await d1.prepare(`
-              INSERT INTO orders (id, trackingCode, customerName, customerPhone, address, addressDetails, paymentMode, items, couponCode, subtotal, discount, finalTotal, status, statusMessage, whatsAppUrl, createdAt, updatedAt, archived)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-            `).bind(newOrder.id, newOrder.trackingCode, newOrder.customerName, newOrder.customerPhone, newOrder.address, JSON.stringify(newOrder.addressDetails), newOrder.paymentMode, JSON.stringify(newOrder.items), newOrder.couponCode, newOrder.subtotal, newOrder.discount, newOrder.finalTotal, newOrder.status, newOrder.statusMessage, newOrder.whatsAppUrl, newOrder.createdAt, newOrder.updatedAt).run();
-          } catch {}
+              INSERT INTO orders (id, trackingCode, customerName, customerPhone, address, addressDetails, paymentMode, items, couponCode, subtotal, discount, finalTotal, payableTotal, deliveryFee, extraDeliveryFee, deliveryFeeStatus, deliveryFeeNote, upiTransactionRef, status, statusMessage, whatsAppUrl, createdAt, updatedAt, archived)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            `).bind(newOrder.id, newOrder.trackingCode, newOrder.customerName, newOrder.customerPhone, newOrder.address, JSON.stringify(newOrder.addressDetails), newOrder.paymentMode, JSON.stringify(newOrder.items), newOrder.couponCode, newOrder.subtotal, newOrder.discount, newOrder.finalTotal, newOrder.payableTotal, newOrder.deliveryFee, newOrder.extraDeliveryFee, newOrder.deliveryFeeStatus, newOrder.deliveryFeeNote, newOrder.upiTransactionRef, newOrder.status, newOrder.statusMessage, newOrder.whatsAppUrl, newOrder.createdAt, newOrder.updatedAt).run();
+          } catch {
+            try {
+              await d1.prepare(`
+                INSERT INTO orders (id, trackingCode, customerName, customerPhone, address, addressDetails, paymentMode, items, couponCode, subtotal, discount, finalTotal, status, statusMessage, whatsAppUrl, createdAt, updatedAt, archived)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+              `).bind(newOrder.id, newOrder.trackingCode, newOrder.customerName, newOrder.customerPhone, newOrder.address, JSON.stringify(newOrder.addressDetails), newOrder.paymentMode, JSON.stringify(newOrder.items), newOrder.couponCode, newOrder.subtotal, newOrder.discount, newOrder.finalTotal, newOrder.status, newOrder.statusMessage, newOrder.whatsAppUrl, newOrder.createdAt, newOrder.updatedAt).run();
+            } catch {}
+          }
         }
 
         broadcastSSE('NEW_ORDER', newOrder);
@@ -1332,13 +1479,90 @@ export default {
       }
 
       if (pathname.startsWith('/api/orders/track/')) {
-        const query = pathname.replace('/api/orders/track/', '').toUpperCase().trim();
-        const o = memoryDb.orders.find((ord: any) => 
-          (ord.trackingCode || '').toUpperCase() === query || 
-          (ord.customerPhone || '').replace(/\D/g, '') === query.replace(/\D/g, '')
-        );
-        if (o) return jsonResponse({ success: true, order: o, data: o }, 200, request);
-        return jsonResponse({ success: false, message: `No active order found for "${query}".` }, 404, request);
+        const rawQuery = decodeURIComponent(pathname.replace('/api/orders/track/', '')).trim();
+        const upperQuery = rawQuery.toUpperCase();
+        const digits = rawQuery.replace(/\D/g, '');
+        const last10 = digits.slice(-10);
+
+        let matchingOrders = memoryDb.orders.filter((ord: any) => {
+          const codeMatch = (ord.trackingCode || '').toUpperCase() === upperQuery || (ord.id || '').toUpperCase() === upperQuery;
+          const phoneDigits = (ord.customerPhone || '').replace(/\D/g, '');
+          const phoneMatch = last10.length === 10 && phoneDigits.slice(-10) === last10;
+          return codeMatch || phoneMatch;
+        });
+
+        if (matchingOrders.length === 0 && d1) {
+          try {
+            const d1Res = await d1.prepare('SELECT * FROM orders ORDER BY createdAt DESC LIMIT 100').all();
+            if (d1Res?.results) {
+              matchingOrders = d1Res.results.filter((ord: any) => {
+                const codeMatch = (ord.trackingCode || '').toUpperCase() === upperQuery || (ord.id || '').toUpperCase() === upperQuery;
+                const phoneDigits = (ord.customerPhone || '').replace(/\D/g, '');
+                const phoneMatch = last10.length === 10 && phoneDigits.slice(-10) === last10;
+                return codeMatch || phoneMatch;
+              }).map((r: any) => ({
+                ...r,
+                addressDetails: typeof r.addressDetails === 'string' ? JSON.parse(r.addressDetails) : r.addressDetails,
+                items: typeof r.items === 'string' ? JSON.parse(r.items) : (r.items || [])
+              }));
+            }
+          } catch {}
+        }
+
+        return jsonResponse({
+          success: true,
+          found: matchingOrders.length > 0,
+          orders: matchingOrders,
+          order: matchingOrders[0] || null,
+          data: matchingOrders[0] || null,
+          message: matchingOrders.length > 0 ? 'Order found' : `No active order found for "${rawQuery}".`
+        }, 200, request);
+      }
+
+      // PATCH /api/orders/:id/delivery (Admin Delivery Fee Adjustment)
+      if (pathname.startsWith('/api/orders/') && pathname.endsWith('/delivery') && method === 'PATCH') {
+        const id = pathname.replace('/api/orders/', '').replace('/delivery', '');
+        const body: any = await request.json().catch(() => ({}));
+        const o = memoryDb.orders.find((ord: any) => ord.id === id);
+        if (o) {
+          if (body.extraDeliveryFee !== undefined) {
+            o.extraDeliveryFee = Number(body.extraDeliveryFee) || 0;
+          }
+          if (body.deliveryFeeStatus) {
+            o.deliveryFeeStatus = body.deliveryFeeStatus;
+          }
+          if (body.deliveryFeeNote !== undefined) {
+            o.deliveryFeeNote = String(body.deliveryFeeNote);
+          }
+          o.payableTotal = Math.max(0, (o.subtotal || 0) - (o.discount || 0) + (o.deliveryFee || 0) + (o.extraDeliveryFee || 0));
+          o.finalTotal = o.payableTotal;
+          o.updatedAt = new Date().toISOString();
+
+          if (d1) {
+            try {
+              await d1.prepare(`
+                UPDATE orders 
+                SET extraDeliveryFee = ?, deliveryFeeStatus = ?, deliveryFeeNote = ?, payableTotal = ?, finalTotal = ?, updatedAt = ? 
+                WHERE id = ?
+              `).bind(o.extraDeliveryFee, o.deliveryFeeStatus, o.deliveryFeeNote, o.payableTotal, o.finalTotal, o.updatedAt, o.id).run();
+            } catch (err) {
+              console.warn('D1 delivery update notice:', err);
+            }
+          }
+
+          broadcastSSE('ORDER_DELIVERY_UPDATED', {
+            orderId: o.id,
+            trackingCode: o.trackingCode,
+            extraDeliveryFee: o.extraDeliveryFee,
+            deliveryFeeStatus: o.deliveryFeeStatus,
+            deliveryFeeNote: o.deliveryFeeNote,
+            payableTotal: o.payableTotal,
+            order: o
+          });
+          broadcastSSE('ORDER_UPDATED', o);
+          return jsonResponse({ success: true, order: o, data: o }, 200, request);
+        }
+        return jsonResponse({ success: false, message: 'Order not found' }, 404, request);
       }
 
       if (pathname.startsWith('/api/orders/') && pathname.endsWith('/status') && method === 'PATCH') {

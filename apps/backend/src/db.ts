@@ -112,6 +112,12 @@ export interface Order {
   subtotal: number;
   discount: number;
   finalTotal: number;
+  payableTotal?: number;
+  deliveryFee?: number;
+  extraDeliveryFee?: number;
+  deliveryFeeStatus?: 'FREE' | 'PAID' | 'DUE_ON_COD' | 'PENDING_CONFIRMATION';
+  deliveryFeeNote?: string;
+  upiTransactionRef?: string;
   status: 'Pending' | 'Approved' | 'Dispatched' | 'Delivered';
   statusMessage?: string;
   whatsAppUrl: string;
@@ -119,6 +125,42 @@ export interface Order {
   updatedAt?: string;
   archived?: boolean;
 }
+
+export interface StoreSettings {
+  codEnabled: boolean;
+  upiEnabled: boolean;
+  whatsappEnabled: boolean;
+  defaultDeliveryFee: number;
+  freeDeliveryAbove: number;
+  deliveryNote: string;
+  upiId: string;
+  upiPayeeName: string;
+  upiQrImageUrl: string;
+  bankName: string;
+  bankAccountName: string;
+  bankAccountNumber: string;
+  bankIfsc: string;
+  whatsappNumber: string;
+  whatsappMessagePrefix: string;
+}
+
+export const DEFAULT_STORE_SETTINGS: StoreSettings = {
+  codEnabled: true,
+  upiEnabled: true,
+  whatsappEnabled: true,
+  defaultDeliveryFee: 0,
+  freeDeliveryAbove: 999,
+  deliveryNote: 'Free festive delivery on standard orders. Out-of-zone or express COD orders may include an extra delivery charge confirmed during Pending review.',
+  upiId: 'taraluxe@upi',
+  upiPayeeName: 'Tara Luxe Anti-Tarnish Jewellery',
+  upiQrImageUrl: '',
+  bankName: '',
+  bankAccountName: 'Tara Luxe',
+  bankAccountNumber: '',
+  bankIfsc: '',
+  whatsappNumber: '917871501939',
+  whatsappMessagePrefix: 'Hi Tara Luxe! I just placed an order on your website:'
+};
 
 export interface NotificationItem {
   id: string;
@@ -140,6 +182,7 @@ export interface DatabaseSchema {
   bagEvents: BagEvent[];
   orders: Order[];
   notifications?: NotificationItem[];
+  settings?: StoreSettings;
 }
 
 // Verified high-res working jewellery imagery
@@ -826,13 +869,71 @@ class Database {
   }
 
   public getOrderByTrackingOrPhone(query: string): Order | undefined {
-    const clean = query.trim().toUpperCase();
-    const cleanDigits = query.replace(/\D/g, '');
-    return this.data.orders.find(o =>
-      (o.trackingCode && o.trackingCode.toUpperCase() === clean) ||
-      o.id.toUpperCase() === clean ||
-      (cleanDigits.length >= 10 && o.customerPhone.replace(/\D/g, '').endsWith(cleanDigits))
-    );
+    const raw = decodeURIComponent(query || '').trim();
+    const clean = raw.toUpperCase();
+    const cleanDigits = raw.replace(/\D/g, '');
+    const last10 = cleanDigits.slice(-10);
+
+    return this.data.orders.find(o => {
+      const codeMatch = (o.trackingCode && o.trackingCode.toUpperCase() === clean) || (o.id && o.id.toUpperCase() === clean);
+      const phoneDigits = (o.customerPhone || '').replace(/\D/g, '');
+      const phoneMatch = last10.length === 10 && phoneDigits.slice(-10) === last10;
+      return codeMatch || phoneMatch;
+    });
+  }
+
+  public getOrdersByTrackingOrPhone(query: string): Order[] {
+    const raw = decodeURIComponent(query || '').trim();
+    const clean = raw.toUpperCase();
+    const cleanDigits = raw.replace(/\D/g, '');
+    const last10 = cleanDigits.slice(-10);
+
+    return this.data.orders.filter(o => {
+      const codeMatch = (o.trackingCode && o.trackingCode.toUpperCase() === clean) || (o.id && o.id.toUpperCase() === clean);
+      const phoneDigits = (o.customerPhone || '').replace(/\D/g, '');
+      const phoneMatch = last10.length === 10 && phoneDigits.slice(-10) === last10;
+      return codeMatch || phoneMatch;
+    });
+  }
+
+  public updateOrderDelivery(id: string, deliveryData: { extraDeliveryFee?: number; deliveryFeeStatus?: Order['deliveryFeeStatus']; deliveryFeeNote?: string }): Order | null {
+    const index = this.data.orders.findIndex(o => o.id === id);
+    if (index === -1) return null;
+
+    const current = this.data.orders[index];
+    const extraFee = deliveryData.extraDeliveryFee !== undefined ? Number(deliveryData.extraDeliveryFee) : (current.extraDeliveryFee || 0);
+    const feeStatus = deliveryData.deliveryFeeStatus || current.deliveryFeeStatus || 'FREE';
+    const feeNote = deliveryData.deliveryFeeNote !== undefined ? deliveryData.deliveryFeeNote : (current.deliveryFeeNote || '');
+
+    const payableTotal = Math.max(0, (current.subtotal || 0) - (current.discount || 0) + (current.deliveryFee || 0) + extraFee);
+
+    const updated: Order = {
+      ...current,
+      extraDeliveryFee: extraFee,
+      deliveryFeeStatus: feeStatus,
+      deliveryFeeNote: feeNote,
+      payableTotal,
+      finalTotal: payableTotal,
+      updatedAt: new Date().toISOString()
+    };
+
+    const orders = [...this.data.orders];
+    orders[index] = updated;
+    this.save({ ...this.data, orders });
+    return updated;
+  }
+
+  public getSettings(): StoreSettings {
+    return { ...DEFAULT_STORE_SETTINGS, ...(this.data.settings || {}) };
+  }
+
+  public updateSettings(partial: Partial<StoreSettings>): StoreSettings {
+    const updated: StoreSettings = {
+      ...this.getSettings(),
+      ...partial
+    };
+    this.save({ ...this.data, settings: updated });
+    return updated;
   }
 
   public addOrder(order: Omit<Order, 'id' | 'trackingCode' | 'createdAt'>): Order {

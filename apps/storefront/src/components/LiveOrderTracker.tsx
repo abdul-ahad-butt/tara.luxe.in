@@ -94,6 +94,15 @@ export const LiveOrderTracker: React.FC = () => {
                 <p className="text-[11px] text-ivory/70 mt-0.5">
                   {latestActiveOrder.statusMessage || 'Live status syncing in real time'}
                 </p>
+                {/* Active Order Delivery Fee Alert */}
+                {(latestActiveOrder.extraDeliveryFee !== undefined && latestActiveOrder.extraDeliveryFee > 0 || latestActiveOrder.deliveryFeeStatus === 'PENDING_CONFIRMATION' || latestActiveOrder.deliveryFeeStatus === 'DUE_ON_COD') && (
+                  <div className="mt-1 inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-gold/15 border border-gold/30 text-[10px] text-gold-light font-mono">
+                    <Truck className="w-3 h-3 text-gold" />
+                    <span>
+                      Delivery Charge: ₹{(latestActiveOrder.deliveryFee || 0) + (latestActiveOrder.extraDeliveryFee || 0)} ({latestActiveOrder.deliveryFeeStatus}) • Total Payable: ₹{(latestActiveOrder.payableTotal ?? latestActiveOrder.finalTotal).toLocaleString('en-IN')}
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -186,12 +195,34 @@ export const LiveOrderTracker: React.FC = () => {
                     </div>
                   </div>
                   <div className="text-right">
-                    <span className="text-[10px] font-mono text-ivory/50 uppercase">Order Value</span>
-                    <div className="font-serif text-lg font-bold text-ivory">
-                      ₹{searchedOrder.finalTotal.toLocaleString('en-IN')}
+                    <span className="text-[10px] font-mono text-ivory/50 uppercase">Payable Total</span>
+                    <div className="font-serif text-lg font-bold text-gold">
+                      ₹{(searchedOrder.payableTotal ?? searchedOrder.finalTotal).toLocaleString('en-IN')}
                     </div>
                   </div>
                 </div>
+
+                {/* Delivery Fee Status & Notes */}
+                {(searchedOrder.deliveryFee !== undefined || searchedOrder.extraDeliveryFee !== undefined || searchedOrder.deliveryFeeStatus) && (
+                  <div className="p-3 rounded-xl bg-espresso border border-gold/25 space-y-1">
+                    <div className="flex items-center justify-between text-xs font-mono">
+                      <span className="text-ivory/70">Delivery Charges:</span>
+                      <span className="text-gold font-bold">
+                        ₹{(searchedOrder.deliveryFee || 0) + (searchedOrder.extraDeliveryFee || 0)} ({searchedOrder.deliveryFeeStatus || 'FREE'})
+                      </span>
+                    </div>
+                    {searchedOrder.deliveryFeeNote && (
+                      <p className="text-[11px] text-ivory/60 italic">
+                        Note: {searchedOrder.deliveryFeeNote}
+                      </p>
+                    )}
+                    {searchedOrder.upiTransactionRef && (
+                      <div className="text-[10px] font-mono text-emerald-stock pt-0.5">
+                        UPI Reference / UTR: {searchedOrder.upiTransactionRef}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Status Message Highlight */}
                 <div className="p-3 rounded-xl bg-espresso border border-gold/20 text-center">

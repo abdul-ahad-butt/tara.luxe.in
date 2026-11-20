@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useStore } from '../context/StoreContext';
 import { LuxuryImage } from './LuxuryImage';
-import { X, Trash2, Plus, Minus, Tag, Check, ArrowRight, ShoppingBag, Phone, MapPin, User, Sparkles, AlertCircle, Copy } from 'lucide-react';
+import { X, Trash2, Plus, Minus, Tag, Check, ArrowRight, ShoppingBag, Phone, MapPin, User, Sparkles, AlertCircle, Copy, QrCode, CreditCard, Send, ShieldCheck, Building } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
 export const SlideOverBagDrawer: React.FC = () => {
@@ -13,7 +13,10 @@ export const SlideOverBagDrawer: React.FC = () => {
     removeFromBag,
     bagSubtotal,
     discountAmount,
+    deliveryFee,
+    payableTotal,
     finalTotal,
+    settings,
     appliedCoupon,
     applyCoupon,
     removeCoupon,
@@ -41,7 +44,31 @@ export const SlideOverBagDrawer: React.FC = () => {
   const [stateName, setStateName] = useState('');
   const [pincode, setPincode] = useState('');
   const [paymentMode, setPaymentMode] = useState<'COD' | 'UPI' | 'WHATSAPP'>('COD');
+  const [upiTransactionRef, setUpiTransactionRef] = useState('');
+  const [copiedUpi, setCopiedUpi] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+
+  // Filter payment modes based on admin controls in settings
+  const availablePaymentModes = useMemo(() => {
+    const list: Array<{ mode: 'COD' | 'UPI' | 'WHATSAPP'; label: string; desc: string }> = [];
+    if (settings?.codEnabled !== false) {
+      list.push({ mode: 'COD', label: 'Cash on Delivery (COD)', desc: 'Pay cash upon doorstep delivery' });
+    }
+    if (settings?.upiEnabled !== false) {
+      list.push({ mode: 'UPI', label: 'UPI QR Pay / Bank', desc: 'Scan QR with GPay, PhonePe, Paytm, etc.' });
+    }
+    if (settings?.whatsappEnabled !== false) {
+      list.push({ mode: 'WHATSAPP', label: 'WhatsApp Direct', desc: 'Order directly via concierge chat' });
+    }
+    return list;
+  }, [settings]);
+
+  // Ensure selected paymentMode is enabled
+  useEffect(() => {
+    if (availablePaymentModes.length > 0 && !availablePaymentModes.some(p => p.mode === paymentMode)) {
+      setPaymentMode(availablePaymentModes[0].mode);
+    }
+  }, [availablePaymentModes, paymentMode]);
 
   const hasStockDeficit = bag.some((i) => i.product.quantity <= 0 || i.quantity > i.product.quantity);
 
@@ -127,7 +154,8 @@ export const SlideOverBagDrawer: React.FC = () => {
         state: stateName.trim(),
         pincode: pincode.trim()
       },
-      paymentMode
+      paymentMode,
+      upiTransactionRef: paymentMode === 'UPI' ? upiTransactionRef.trim() : undefined
     });
 
     setIsCheckingOut(false);
@@ -408,25 +436,21 @@ export const SlideOverBagDrawer: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Payment Mode */}
+                {/* Payment Mode Selection */}
                 <div>
                   <label className="block text-[11px] font-mono uppercase tracking-wider text-ivory/70 mb-1.5">
                     Payment Mode
                   </label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {[
-                      { mode: 'COD', label: 'Cash on Delivery (COD)' },
-                      { mode: 'UPI', label: 'UPI QR Pay' },
-                      { mode: 'WHATSAPP', label: 'WhatsApp Direct' }
-                    ].map((p) => (
+                  <div className={`grid ${availablePaymentModes.length === 1 ? 'grid-cols-1' : availablePaymentModes.length === 2 ? 'grid-cols-2' : 'grid-cols-3'} gap-2`}>
+                    {availablePaymentModes.map((p) => (
                       <button
                         type="button"
                         key={p.mode}
-                        onClick={() => setPaymentMode(p.mode as any)}
+                        onClick={() => setPaymentMode(p.mode)}
                         className={`p-2.5 rounded-xl border text-[11px] font-semibold text-center transition-all ${
                           paymentMode === p.mode
-                            ? 'bg-gold/20 border-gold text-gold-light'
-                            : 'bg-obsidian border-gold/20 text-ivory/60 hover:text-ivory'
+                            ? 'bg-gold/20 border-gold text-gold-light shadow-sm'
+                            : 'bg-obsidian border-gold/20 text-ivory/60 hover:text-ivory hover:border-gold/40'
                         }`}
                       >
                         {p.label}
@@ -435,6 +459,116 @@ export const SlideOverBagDrawer: React.FC = () => {
                   </div>
                 </div>
 
+                {/* Mode 1: Cash on Delivery (COD) Details */}
+                {paymentMode === 'COD' && (
+                  <div className="p-3.5 rounded-2xl bg-espresso/90 border border-gold/30 text-xs space-y-1.5 animate-in fade-in">
+                    <div className="font-serif font-bold text-gold flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-gold" />
+                      <span>Cash on Delivery (COD)</span>
+                    </div>
+                    <p className="text-[11px] text-ivory/70 leading-relaxed">
+                      {settings?.deliveryNote || 'Standard delivery. Out-of-zone or express COD orders may include an extra delivery charge confirmed during Pending review.'}
+                    </p>
+                  </div>
+                )}
+
+                {/* Mode 2: UPI QR Pay / Bank Details */}
+                {paymentMode === 'UPI' && (
+                  <div className="p-4 rounded-2xl bg-espresso/90 border border-gold/40 space-y-3.5 animate-in fade-in">
+                    <div className="flex items-center justify-between border-b border-gold/15 pb-2">
+                      <div className="flex items-center gap-2 text-xs font-serif font-bold text-gold">
+                        <QrCode className="w-4 h-4 text-gold" />
+                        <span>Scan UPI QR Code (₹{payableTotal.toLocaleString('en-IN')})</span>
+                      </div>
+                      <span className="text-[10px] font-mono text-emerald-stock font-bold">Zero Gateway Fees</span>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row items-center gap-4">
+                      {/* Live Generated or Admin-Uploaded QR Code */}
+                      <div className="w-32 h-32 p-1.5 rounded-xl bg-white border border-gold/40 flex items-center justify-center flex-shrink-0 shadow-lg">
+                        <img
+                          src={
+                            settings?.upiQrImageUrl && settings.upiQrImageUrl.trim() !== ''
+                              ? settings.upiQrImageUrl
+                              : `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(
+                                  `upi://pay?pa=${settings?.upiId || 'taraluxe@upi'}&pn=${encodeURIComponent(
+                                    settings?.upiPayeeName || 'Tara Luxe Anti-Tarnish Jewellery'
+                                  )}&am=${payableTotal}&cu=INR&tn=${encodeURIComponent('Tara Luxe Jewellery Order')}`
+                                )}`
+                          }
+                          alt="Tara Luxe UPI QR Code"
+                          className="w-full h-full object-contain"
+                        />
+                      </div>
+
+                      <div className="flex-1 space-y-2 text-xs w-full">
+                        <div>
+                          <div className="text-[10px] font-mono text-ivory/50 uppercase">UPI ID / VPA</div>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="font-mono text-xs font-bold text-gold-light truncate">
+                              {settings?.upiId || 'taraluxe@upi'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(settings?.upiId || 'taraluxe@upi');
+                                setCopiedUpi(true);
+                                setTimeout(() => setCopiedUpi(false), 2000);
+                              }}
+                              className="p-1 rounded-md bg-obsidian border border-gold/30 text-ivory/70 hover:text-gold"
+                              title="Copy UPI ID"
+                            >
+                              {copiedUpi ? <Check className="w-3.5 h-3.5 text-emerald-stock" /> : <Copy className="w-3.5 h-3.5" />}
+                            </button>
+                          </div>
+                          <div className="text-[10px] text-ivory/60 mt-0.5">
+                            {settings?.upiPayeeName || 'Tara Luxe Anti-Tarnish Jewellery'}
+                          </div>
+                        </div>
+
+                        {/* Bank Account Details if populated */}
+                        {settings?.bankAccountNumber && (
+                          <div className="pt-2 border-t border-gold/15 text-[10px] font-mono text-ivory/70 space-y-0.5">
+                            <div>Bank: {settings.bankName || 'Direct NEFT/IMPS'}</div>
+                            <div>A/C: {settings.bankAccountNumber} ({settings.bankAccountName || 'Tara Luxe'})</div>
+                            <div>IFSC: {settings.bankIfsc}</div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* UTR Input Field */}
+                    <div className="pt-2 border-t border-gold/15">
+                      <label className="block text-[11px] font-mono uppercase tracking-wider text-ivory/70 mb-1">
+                        12-Digit UPI Ref / UTR Number (Optional)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. 432109876543 (from GPay / PhonePe / Paytm)"
+                        value={upiTransactionRef}
+                        onChange={(e) => setUpiTransactionRef(e.target.value.trim())}
+                        className="w-full bg-obsidian border border-gold/30 rounded-xl px-3 py-2 text-xs text-ivory font-mono focus:border-gold"
+                      />
+                      <p className="text-[10px] text-ivory/50 mt-1">
+                        Enter your 12-digit UPI reference number after scanning & paying to accelerate your dispatch confirmation.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Mode 3: WhatsApp Direct Details */}
+                {paymentMode === 'WHATSAPP' && (
+                  <div className="p-3.5 rounded-2xl bg-espresso/90 border border-emerald-500/40 text-xs space-y-1.5 animate-in fade-in">
+                    <div className="font-serif font-bold text-emerald-300 flex items-center gap-1.5">
+                      <Send className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>WhatsApp Direct Order Concierge</span>
+                    </div>
+                    <p className="text-[11px] text-ivory/70 leading-relaxed">
+                      Confirm order and delivery charges directly with Tara Luxe on WhatsApp (+{settings?.whatsappNumber || '917871501939'}). Your bag and delivery address will be pre-filled into the chat window upon clicking Confirm Order.
+                    </p>
+                  </div>
+                )}
+
                 {/* Final Order Confirmation Button */}
                 <button
                   type="submit"
@@ -442,7 +576,7 @@ export const SlideOverBagDrawer: React.FC = () => {
                   className="w-full mt-4 py-3.5 rounded-xl bg-gold hover:bg-gold-light text-obsidian font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-gold-glow transition-all disabled:opacity-50"
                 >
                   <Sparkles className="w-4 h-4" />
-                  <span>{isCheckingOut ? 'Securing Stock & Generating Tracking Code...' : `Confirm Order (₹${finalTotal.toLocaleString('en-IN')})`}</span>
+                  <span>{isCheckingOut ? 'Securing Stock & Generating Tracking Code...' : `Confirm Order (₹${payableTotal.toLocaleString('en-IN')})`}</span>
                 </button>
               </form>
             ) : (
@@ -649,11 +783,13 @@ export const SlideOverBagDrawer: React.FC = () => {
                 )}
                 <div className="flex justify-between text-ivory/70">
                   <span>Delivery Charges</span>
-                  <span className="text-emerald-stock font-mono">FREE (Festive Offer)</span>
+                  <span className={deliveryFee === 0 ? "text-emerald-stock font-mono" : "text-gold font-mono"}>
+                    {deliveryFee === 0 ? 'FREE (Festive Offer)' : `₹${deliveryFee}`}
+                  </span>
                 </div>
                 <div className="flex justify-between text-base font-serif font-bold text-gold pt-2 border-t border-gold/15">
                   <span>Payable Total</span>
-                  <span className="font-mono">₹{finalTotal.toLocaleString('en-IN')}</span>
+                  <span className="font-mono">₹{payableTotal.toLocaleString('en-IN')}</span>
                 </div>
               </div>
 

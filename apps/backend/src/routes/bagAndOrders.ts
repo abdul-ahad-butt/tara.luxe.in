@@ -108,18 +108,45 @@ bagAndOrdersRouter.get('/orders', (req, res) => {
 
 // GET /api/orders/track/:query (Live tracking by trackingCode e.g. TLX-482910 or Phone)
 bagAndOrdersRouter.get('/orders/track/:query', (req, res) => {
-  const order = db.getOrderByTrackingOrPhone(req.params.query);
-  if (!order) {
-    return res.status(404).json({
-      success: false,
-      message: `No active order found for "${req.params.query}". Please check your Tracking Code (TLX-XXXXXX) or 10-digit phone number.`
-    });
-  }
+  const query = req.params.query;
+  const order = db.getOrderByTrackingOrPhone(query);
+  const orders = db.getOrdersByTrackingOrPhone(query);
 
   res.json({
     success: true,
-    data: order
+    found: Boolean(order),
+    orders,
+    order: order || null,
+    data: order || null,
+    message: order ? 'Order found' : `No active order found for "${query}".`
   });
+});
+
+// PATCH /api/orders/:id/delivery (Update delivery fee and status for order)
+bagAndOrdersRouter.patch('/orders/:id/delivery', (req, res) => {
+  const { extraDeliveryFee, deliveryFeeStatus, deliveryFeeNote } = req.body;
+  const updated = db.updateOrderDelivery(req.params.id, {
+    extraDeliveryFee,
+    deliveryFeeStatus,
+    deliveryFeeNote
+  });
+
+  if (!updated) {
+    return res.status(404).json({ success: false, message: 'Order not found' });
+  }
+
+  sse.broadcast('ORDER_DELIVERY_UPDATED', {
+    orderId: updated.id,
+    trackingCode: updated.trackingCode,
+    extraDeliveryFee: updated.extraDeliveryFee,
+    deliveryFeeStatus: updated.deliveryFeeStatus,
+    deliveryFeeNote: updated.deliveryFeeNote,
+    payableTotal: updated.payableTotal,
+    order: updated
+  });
+  sse.broadcast('ORDER_UPDATED', updated);
+
+  res.json({ success: true, data: updated, order: updated });
 });
 
 // POST /api/orders (Customer checkout & stock deduction)
@@ -134,7 +161,13 @@ bagAndOrdersRouter.post('/orders', (req, res) => {
     couponCode,
     subtotal,
     discount,
-    finalTotal
+    finalTotal,
+    payableTotal,
+    deliveryFee,
+    extraDeliveryFee,
+    deliveryFeeStatus,
+    deliveryFeeNote,
+    upiTransactionRef
   } = req.body;
 
   if (!customerName || !customerPhone || !address || !Array.isArray(items) || items.length === 0) {
@@ -195,6 +228,12 @@ bagAndOrdersRouter.post('/orders', (req, res) => {
     subtotal: Number(subtotal) || 0,
     discount: Number(discount) || 0,
     finalTotal: Number(finalTotal) || 0,
+    payableTotal: payableTotal !== undefined ? Number(payableTotal) : Number(finalTotal) || 0,
+    deliveryFee: deliveryFee !== undefined ? Number(deliveryFee) : 0,
+    extraDeliveryFee: extraDeliveryFee !== undefined ? Number(extraDeliveryFee) : 0,
+    deliveryFeeStatus: deliveryFeeStatus || 'FREE',
+    deliveryFeeNote: deliveryFeeNote || '',
+    upiTransactionRef: upiTransactionRef ? String(upiTransactionRef).trim() : '',
     status: 'Pending',
     statusMessage: 'Your order request is Pending Admin Approval',
     whatsAppUrl: ''

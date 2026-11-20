@@ -1,11 +1,11 @@
 import React from 'react';
 import { BrandLogo } from './BrandLogo';
 import { useAdmin } from '../context/AdminRealtimeContext';
-import { Activity, Package, Tag, BarChart3, ExternalLink, Radio, Sparkles, LogOut, Users } from 'lucide-react';
+import { Activity, Package, Tag, BarChart3, ExternalLink, Radio, Sparkles, LogOut, Users, CreditCard } from 'lucide-react';
 
 interface AdminSidebarProps {
-  activeTab: 'live-feed' | 'products' | 'coupons' | 'highlights-collabs' | 'overview';
-  setActiveTab: (tab: 'live-feed' | 'products' | 'coupons' | 'highlights-collabs' | 'overview') => void;
+  activeTab: 'live-feed' | 'products' | 'coupons' | 'highlights-collabs' | 'payments-delivery' | 'overview';
+  setActiveTab: (tab: 'live-feed' | 'products' | 'coupons' | 'highlights-collabs' | 'payments-delivery' | 'overview') => void;
 }
 
 export const AdminSidebar: React.FC<AdminSidebarProps> = ({ activeTab, setActiveTab }) => {
@@ -37,6 +37,13 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ activeTab, setActive
       id: 'coupons' as const,
       label: 'Discount Coupons',
       icon: Tag,
+      badge: null,
+      pulse: false
+    },
+    {
+      id: 'payments-delivery' as const,
+      label: 'Payments & Delivery',
+      icon: CreditCard,
       badge: null,
       pulse: false
     },

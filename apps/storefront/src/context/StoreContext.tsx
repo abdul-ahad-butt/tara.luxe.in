@@ -55,6 +55,42 @@ export interface Coupon {
   maxUses?: number;
 }
 
+export interface StoreSettings {
+  codEnabled: boolean;
+  upiEnabled: boolean;
+  whatsappEnabled: boolean;
+  defaultDeliveryFee: number;
+  freeDeliveryAbove: number;
+  deliveryNote: string;
+  upiId: string;
+  upiPayeeName: string;
+  upiQrImageUrl: string;
+  bankName: string;
+  bankAccountName: string;
+  bankAccountNumber: string;
+  bankIfsc: string;
+  whatsappNumber: string;
+  whatsappMessagePrefix: string;
+}
+
+export const DEFAULT_STORE_SETTINGS: StoreSettings = {
+  codEnabled: true,
+  upiEnabled: true,
+  whatsappEnabled: true,
+  defaultDeliveryFee: 0,
+  freeDeliveryAbove: 999,
+  deliveryNote: 'Free festive delivery on standard orders. Out-of-zone or express COD orders may include an extra delivery charge confirmed during Pending review.',
+  upiId: 'taraluxe@upi',
+  upiPayeeName: 'Tara Luxe Anti-Tarnish Jewellery',
+  upiQrImageUrl: '',
+  bankName: '',
+  bankAccountName: 'Tara Luxe',
+  bankAccountNumber: '',
+  bankIfsc: '',
+  whatsappNumber: '917871501939',
+  whatsappMessagePrefix: 'Hi Tara Luxe! I just placed an order on your website:'
+};
+
 export interface BagItem {
   productId: string;
   product: Product;
@@ -87,6 +123,12 @@ export interface Order {
   subtotal: number;
   discount: number;
   finalTotal: number;
+  payableTotal?: number;
+  deliveryFee?: number;
+  extraDeliveryFee?: number;
+  deliveryFeeStatus?: 'FREE' | 'PAID' | 'DUE_ON_COD' | 'PENDING_CONFIRMATION';
+  deliveryFeeNote?: string;
+  upiTransactionRef?: string;
   status: 'Pending' | 'Approved' | 'Dispatched' | 'Delivered';
   statusMessage?: string;
   whatsAppUrl: string;
@@ -105,6 +147,9 @@ interface StoreContextType {
   highlights: Highlight[];
   collaborations: Collaboration[];
   coupons: Coupon[];
+  settings: StoreSettings;
+  deliveryFee: number;
+  payableTotal: number;
   bag: BagItem[];
   isBagOpen: boolean;
   appliedCoupon: AppliedCouponInfo | null;
@@ -139,6 +184,7 @@ interface StoreContextType {
       pincode: string;
     };
     paymentMode: 'COD' | 'UPI' | 'WHATSAPP';
+    upiTransactionRef?: string;
   }) => Promise<{ success: boolean; order?: Order; trackingCode?: string; whatsAppUrl?: string; message: string }>;
   trackOrder: (query: string) => Promise<{ success: boolean; data?: Order; message: string }>;
   setIsTrackingModalOpen: (open: boolean) => void;
@@ -492,6 +538,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [highlights, setHighlights] = useState<Highlight[]>(INITIAL_HIGHLIGHTS);
   const [collaborations, setCollaborations] = useState<Collaboration[]>(INITIAL_COLLABORATIONS);
   const [coupons, setCoupons] = useState<Coupon[]>(INITIAL_COUPONS);
+  const [settings, setSettings] = useState<StoreSettings>(DEFAULT_STORE_SETTINGS);
   const [bag, setBag] = useState<BagItem[]>(() => {
     try {
       const saved = localStorage.getItem('tlx_customer_bag_v1') || localStorage.getItem('tl_bag');
@@ -665,6 +712,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             })
           );
         }
+        if (data.settings) {
+          setSettings((prev) => ({ ...prev, ...data.settings }));
+        }
       }
     } catch (err) {
       console.warn('[Storefront] Sync fetch notice:', err);
@@ -723,9 +773,18 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return Math.min(coupon.value, bagSubtotal);
   }, [bagSubtotal, appliedCoupon]);
 
-  const finalTotal = useMemo(() => {
-    return Math.max(0, bagSubtotal - discountAmount);
-  }, [bagSubtotal, discountAmount]);
+  const deliveryFee = useMemo(() => {
+    const threshold = Number(settings.freeDeliveryAbove) || 999;
+    const baseFee = Number(settings.defaultDeliveryFee) || 0;
+    if (bagSubtotal - discountAmount >= threshold) return 0;
+    return baseFee;
+  }, [bagSubtotal, discountAmount, settings]);
+
+  const payableTotal = useMemo(() => {
+    return Math.max(0, bagSubtotal - discountAmount + deliveryFee);
+  }, [bagSubtotal, discountAmount, deliveryFee]);
+
+  const finalTotal = payableTotal;
 
   const bagCount = useMemo(() => {
     return bag.reduce((sum, item) => sum + item.quantity, 0);
@@ -882,6 +941,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         pincode: string;
       };
       paymentMode: 'COD' | 'UPI' | 'WHATSAPP';
+      upiTransactionRef?: string;
     }) => {
       try {
         const items = bag.map((item) => ({
@@ -905,20 +965,26 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             couponCode: appliedCoupon?.coupon.code || null,
             subtotal: bagSubtotal,
             discount: discountAmount,
-            finalTotal
+            deliveryFee,
+            extraDeliveryFee: 0,
+            deliveryFeeStatus: deliveryFee === 0 ? 'FREE' : (customerData.paymentMode === 'COD' ? 'DUE_ON_COD' : 'PENDING_CONFIRMATION'),
+            deliveryFeeNote: deliveryFee === 0 ? 'Free standard delivery' : (settings.deliveryNote || ''),
+            upiTransactionRef: customerData.upiTransactionRef || '',
+            payableTotal,
+            finalTotal: payableTotal
           })
         });
 
         const data = await res.json();
-        if (data.success && data.data) {
-          const newOrder: Order = data.data;
+        if (data.success && (data.data || data.order)) {
+          const newOrder: Order = data.data || data.order;
           setActiveOrders((prev) => [newOrder, ...prev.filter((o) => o.id !== newOrder.id)]);
           clearBag();
           return {
             success: true,
             order: newOrder,
             trackingCode: newOrder.trackingCode,
-            whatsAppUrl: data.whatsAppUrl,
+            whatsAppUrl: data.whatsAppUrl || newOrder.whatsAppUrl,
             message: 'Order placed successfully!'
           };
         } else {
@@ -934,10 +1000,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         };
       }
     },
-    [bag, appliedCoupon, bagSubtotal, discountAmount, finalTotal, clearBag]
+    [bag, appliedCoupon, bagSubtotal, discountAmount, deliveryFee, payableTotal, settings, clearBag]
   );
 
-  // Track Order by Tracking Code or Phone
+  // Track Order by Tracking Code or Phone (Never fails with 404)
   const trackOrder = useCallback(async (query: string) => {
     if (!query || !query.trim()) {
       setTrackingError('Please enter a valid Tracking Code (TLX-XXXXXX) or 10-digit phone number.');
@@ -952,14 +1018,17 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const data = await res.json();
       setIsTrackingLoading(false);
 
-      if (data.success && data.data) {
-        setSearchedOrder(data.data);
-        return { success: true, data: data.data, message: 'Order found' };
-      } else {
-        setSearchedOrder(null);
-        setTrackingError(data.message || 'No order found with this tracking code or phone number.');
-        return { success: false, message: data.message };
+      if (data && (data.found || (data.success && (data.data || (Array.isArray(data.orders) && data.orders.length > 0))))) {
+        const orderData: Order = data.data || (Array.isArray(data.orders) && data.orders[0]);
+        if (orderData) {
+          setSearchedOrder(orderData);
+          setActiveOrders((prev) => [orderData, ...prev.filter((o) => o.id !== orderData.id)]);
+          return { success: true, data: orderData, message: 'Order found' };
+        }
       }
+      setSearchedOrder(null);
+      setTrackingError(data.message || 'No order found with this tracking code or phone number.');
+      return { success: false, message: data.message };
     } catch (err: any) {
       setIsTrackingLoading(false);
       setTrackingError('Network error checking order status.');
@@ -975,6 +1044,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         highlights,
         collaborations,
         coupons,
+        settings,
+        deliveryFee,
+        payableTotal,
         bag,
         isBagOpen,
         appliedCoupon,
@@ -1004,7 +1076,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setSearchedOrder,
         bagSubtotal,
         discountAmount,
-        finalTotal,
+        finalTotal: payableTotal,
         bagCount
       }}
     >

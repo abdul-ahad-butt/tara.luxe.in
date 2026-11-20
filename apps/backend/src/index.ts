@@ -75,6 +75,7 @@ app.get('/api/sync', (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
   res.setHeader('Pragma', 'no-cache');
   res.json({
+    ok: true,
     success: true,
     status: 'ok',
     database: 'local-file-db',
@@ -87,6 +88,7 @@ app.get('/api/sync', (req, res) => {
     bagEvents,
     orders,
     notifications,
+    settings: (db as any).getSettings ? (db as any).getSettings() : undefined,
     kpis: {
       totalProducts: products.length,
       totalInventory: products.reduce((acc, p) => acc + (Number(p.quantity) || 0), 0),
@@ -97,6 +99,23 @@ app.get('/api/sync', (req, res) => {
       unreadNotifications: notifications.filter((n: any) => !n.read).length
     }
   });
+});
+
+// Store Settings Endpoints (Payments, Delivery, Bank, WhatsApp)
+app.get('/api/settings', (req, res) => {
+  res.json({ success: true, settings: (db as any).getSettings() });
+});
+
+app.put('/api/settings', (req, res) => {
+  const updated = (db as any).updateSettings(req.body);
+  sse.broadcast('SETTINGS_UPDATED', updated);
+  res.json({ success: true, settings: updated });
+});
+
+app.patch('/api/settings', (req, res) => {
+  const updated = (db as any).updateSettings(req.body);
+  sse.broadcast('SETTINGS_UPDATED', updated);
+  res.json({ success: true, settings: updated });
 });
 
 // SSE real-time stream endpoint

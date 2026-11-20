@@ -97,6 +97,12 @@ export interface Order {
   subtotal: number;
   discount: number;
   finalTotal: number;
+  payableTotal?: number;
+  deliveryFee?: number;
+  extraDeliveryFee?: number;
+  deliveryFeeStatus?: 'FREE' | 'PAID' | 'DUE_ON_COD' | 'PENDING_CONFIRMATION';
+  deliveryFeeNote?: string;
+  upiTransactionRef?: string;
   status: 'Pending' | 'Approved' | 'Dispatched' | 'Delivered';
   statusMessage?: string;
   whatsAppUrl: string;
@@ -104,6 +110,42 @@ export interface Order {
   updatedAt?: string;
   archived?: boolean;
 }
+
+export interface StoreSettings {
+  codEnabled: boolean;
+  upiEnabled: boolean;
+  whatsappEnabled: boolean;
+  defaultDeliveryFee: number;
+  freeDeliveryAbove: number;
+  deliveryNote: string;
+  upiId: string;
+  upiPayeeName: string;
+  upiQrImageUrl: string;
+  bankName: string;
+  bankAccountName: string;
+  bankAccountNumber: string;
+  bankIfsc: string;
+  whatsappNumber: string;
+  whatsappMessagePrefix: string;
+}
+
+export const DEFAULT_STORE_SETTINGS: StoreSettings = {
+  codEnabled: true,
+  upiEnabled: true,
+  whatsappEnabled: true,
+  defaultDeliveryFee: 0,
+  freeDeliveryAbove: 999,
+  deliveryNote: 'Free festive delivery on standard orders. Out-of-zone or express COD orders may include an extra delivery charge confirmed during Pending review.',
+  upiId: 'taraluxe@upi',
+  upiPayeeName: 'Tara Luxe Anti-Tarnish Jewellery',
+  upiQrImageUrl: '',
+  bankName: '',
+  bankAccountName: 'Tara Luxe',
+  bankAccountNumber: '',
+  bankIfsc: '',
+  whatsappNumber: '917871501939',
+  whatsappMessagePrefix: 'Hi Tara Luxe! I just placed an order on your website:'
+};
 
 export interface AlertNotification {
   id: string;
@@ -172,10 +214,15 @@ interface AdminContextType {
 
   // Order Actions
   updateOrderStatus: (orderId: string, status: Order['status'], customMessage?: string) => Promise<boolean>;
+  updateOrderDelivery: (orderId: string, deliveryData: { extraDeliveryFee: number; deliveryFeeStatus: Order['deliveryFeeStatus']; deliveryFeeNote: string }) => Promise<boolean>;
   deleteOrder: (orderId: string) => Promise<boolean>;
   bulkDeleteOrders: (ids: string[]) => Promise<boolean>;
   archiveOrder: (orderId: string, archived?: boolean) => Promise<boolean>;
   bulkArchiveOrders: (ids: string[], archived?: boolean) => Promise<boolean>;
+
+  // Store Settings (Payments, Delivery, Bank, WhatsApp)
+  settings: StoreSettings;
+  updateSettings: (newSettings: Partial<StoreSettings>) => Promise<boolean>;
 
   // Bag Event Actions
   deleteBagEvent: (id: string) => Promise<boolean>;
@@ -561,6 +608,7 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
   const [bagEvents, setBagEvents] = useState<BagEvent[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [alerts, setAlerts] = useState<AlertNotification[]>([]);
+  const [settings, setSettings] = useState<StoreSettings>(DEFAULT_STORE_SETTINGS);
   const [sseConnected, setSseConnected] = useState(true);
   const [unreadEventsCount, setUnreadEventsCount] = useState(0);
 
@@ -612,6 +660,7 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
         if (Array.isArray(data.coupons) && data.coupons.length > 0) setCoupons(data.coupons);
         if (Array.isArray(data.bagEvents)) setBagEvents(data.bagEvents);
         if (Array.isArray(data.orders)) setOrders(data.orders);
+        if (data.settings) setSettings(data.settings);
         if (Array.isArray(data.notifications)) {
           setAlerts(data.notifications);
           const unread = data.notifications.filter((n: AlertNotification) => !n.read).length;
@@ -992,6 +1041,55 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   }, [fetchSyncData]);
 
+  const updateOrderDelivery = useCallback(async (orderId: string, deliveryData: { extraDeliveryFee: number; deliveryFeeStatus: Order['deliveryFeeStatus']; deliveryFeeNote: string }) => {
+    try {
+      setOrders((prev) => prev.map((o) => {
+        if (o.id === orderId) {
+          const payableTotal = Math.max(0, (o.subtotal || 0) - (o.discount || 0) + (o.deliveryFee || 0) + Number(deliveryData.extraDeliveryFee || 0));
+          return {
+            ...o,
+            ...deliveryData,
+            payableTotal,
+            finalTotal: payableTotal,
+            updatedAt: new Date().toISOString()
+          };
+        }
+        return o;
+      }));
+
+      const res = await fetch(`${BACKEND_URL}/api/orders/${orderId}/delivery`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(deliveryData)
+      });
+      if (res.ok) fetchSyncData();
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }, [fetchSyncData]);
+
+  const updateSettings = useCallback(async (newSettings: Partial<StoreSettings>) => {
+    try {
+      const merged = { ...settings, ...newSettings };
+      setSettings(merged);
+      const res = await fetch(`${BACKEND_URL}/api/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(merged)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.settings) setSettings(data.settings);
+        fetchSyncData();
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }, [settings, fetchSyncData]);
+
   const deleteOrder = useCallback(async (orderId: string) => {
     setOrders((prev) => prev.filter((o) => o.id !== orderId));
     try {
@@ -1182,10 +1280,13 @@ export const AdminRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
     deleteCoupon,
     bulkDeleteCoupons,
     updateOrderStatus,
+    updateOrderDelivery,
     deleteOrder,
     bulkDeleteOrders,
     archiveOrder,
     bulkArchiveOrders,
+    settings,
+    updateSettings,
     deleteBagEvent,
     bulkDeleteBagEvents,
     archiveBagEvent,

@@ -19,7 +19,11 @@ import {
   ArchiveRestore,
   Square,
   CheckSquare,
-  AlertTriangle
+  AlertTriangle,
+  CreditCard,
+  Check,
+  Copy,
+  DollarSign
 } from 'lucide-react';
 
 export const LiveBagFeedView: React.FC = () => {
@@ -27,6 +31,8 @@ export const LiveBagFeedView: React.FC = () => {
     bagEvents,
     orders,
     updateOrderStatus,
+    updateOrderDelivery,
+    settings,
     archiveOrder,
     bulkArchiveOrders,
     deleteOrder,
@@ -43,6 +49,14 @@ export const LiveBagFeedView: React.FC = () => {
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [isProcessingBulk, setIsProcessingBulk] = useState(false);
+  const [copiedUtr, setCopiedUtr] = useState<string | null>(null);
+
+  // Delivery fee editing state per order
+  const [deliveryEditOrderId, setDeliveryEditOrderId] = useState<string | null>(null);
+  const [editExtraFee, setEditExtraFee] = useState<number>(0);
+  const [editFeeStatus, setEditFeeStatus] = useState<Order['deliveryFeeStatus']>('FREE');
+  const [editFeeNote, setEditFeeNote] = useState<string>('');
+  const [isSavingDelivery, setIsSavingDelivery] = useState(false);
 
   // Filter orders and bag events based on active/archived sub-tab
   const filteredOrders = useMemo(() => {
@@ -457,6 +471,29 @@ export const LiveBagFeedView: React.FC = () => {
                             <Phone className="w-3 h-3" /> {o.customerPhone}
                           </a>
                           <span className="text-ivory/50">| Payment: <strong className="text-ivory">{o.paymentMode}</strong></span>
+
+                          {/* UTR Reference Tag for UPI */}
+                          {o.upiTransactionRef && (
+                            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-gold/15 border border-gold/40 text-[11px] font-mono text-gold-light">
+                              <CreditCard className="w-3 h-3 text-gold" />
+                              <span>UTR: {o.upiTransactionRef}</span>
+                              <button
+                                onClick={() => {
+                                  navigator.clipboard.writeText(o.upiTransactionRef || '');
+                                  setCopiedUtr(o.upiTransactionRef || null);
+                                  setTimeout(() => setCopiedUtr(null), 2000);
+                                }}
+                                className="p-0.5 text-ivory/50 hover:text-gold"
+                                title="Copy UTR number"
+                              >
+                                {copiedUtr === o.upiTransactionRef ? (
+                                  <Check className="w-3 h-3 text-emerald-stock" />
+                                ) : (
+                                  <Copy className="w-3 h-3" />
+                                )}
+                              </button>
+                            </div>
+                          )}
                         </div>
 
                         {/* Customer Address */}
@@ -473,6 +510,116 @@ export const LiveBagFeedView: React.FC = () => {
                             )}
                           </div>
                         </div>
+
+                        {/* Delivery Status & Fee Badge */}
+                        <div className="text-xs flex flex-wrap items-center gap-2 pt-1">
+                          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-obsidian border border-gold/25 font-mono text-[11px]">
+                            <Truck className="w-3.5 h-3.5 text-gold" />
+                            <span className="text-ivory/60">Delivery:</span>
+                            <span className="text-gold font-bold">
+                              ₹{(o.deliveryFee || 0) + (o.extraDeliveryFee || 0)}
+                            </span>
+                            <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
+                              o.deliveryFeeStatus === 'PAID'
+                                ? 'bg-emerald-500/20 text-emerald-300'
+                                : o.deliveryFeeStatus === 'DUE_ON_COD'
+                                ? 'bg-amber-500/20 text-amber-300'
+                                : o.deliveryFeeStatus === 'PENDING_CONFIRMATION'
+                                ? 'bg-purple-500/20 text-purple-300'
+                                : 'bg-gold/20 text-gold-light'
+                            }`}>
+                              {o.deliveryFeeStatus || 'FREE'}
+                            </span>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (deliveryEditOrderId === o.id) {
+                                setDeliveryEditOrderId(null);
+                              } else {
+                                setDeliveryEditOrderId(o.id);
+                                setEditExtraFee(o.extraDeliveryFee || 0);
+                                setEditFeeStatus(o.deliveryFeeStatus || 'FREE');
+                                setEditFeeNote(o.deliveryFeeNote || '');
+                              }
+                            }}
+                            className="px-2.5 py-1 rounded-xl bg-gold/10 hover:bg-gold/20 border border-gold/30 text-[11px] text-gold font-medium transition-all"
+                          >
+                            {deliveryEditOrderId === o.id ? 'Close Fee Editor' : '✏️ Delivery & COD Fee'}
+                          </button>
+                        </div>
+
+                        {/* Inline Delivery Fee Editor Panel */}
+                        {deliveryEditOrderId === o.id && (
+                          <div className="p-3.5 mt-2 rounded-xl bg-obsidian/90 border border-gold/40 space-y-3 animate-in fade-in">
+                            <div className="text-xs font-mono font-bold text-gold uppercase flex items-center gap-1.5">
+                              <DollarSign className="w-3.5 h-3.5" />
+                              <span>Adjust Delivery / COD Charges</span>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+                              <div>
+                                <label className="block text-[10px] font-mono text-ivory/60 mb-1">Extra Delivery Fee (₹)</label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={editExtraFee}
+                                  onChange={(e) => setEditExtraFee(Math.max(0, Number(e.target.value) || 0))}
+                                  className="w-full bg-espresso border border-gold/30 rounded-lg px-2.5 py-1.5 text-xs text-ivory font-mono focus:border-gold"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="block text-[10px] font-mono text-ivory/60 mb-1">Fee Status</label>
+                                <select
+                                  value={editFeeStatus}
+                                  onChange={(e) => setEditFeeStatus(e.target.value as any)}
+                                  className="w-full bg-espresso border border-gold/30 rounded-lg px-2 py-1.5 text-xs text-ivory focus:border-gold cursor-pointer"
+                                >
+                                  <option value="FREE">FREE</option>
+                                  <option value="PAID">PAID</option>
+                                  <option value="DUE_ON_COD">DUE_ON_COD</option>
+                                  <option value="PENDING_CONFIRMATION">PENDING_CONFIRMATION</option>
+                                </select>
+                              </div>
+
+                              <div>
+                                <label className="block text-[10px] font-mono text-ivory/60 mb-1">Admin Fee Note</label>
+                                <input
+                                  type="text"
+                                  placeholder="e.g. Out-of-zone courier fee"
+                                  value={editFeeNote}
+                                  onChange={(e) => setEditFeeNote(e.target.value)}
+                                  className="w-full bg-espresso border border-gold/30 rounded-lg px-2.5 py-1.5 text-xs text-ivory focus:border-gold"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="flex items-center justify-between pt-1">
+                              <div className="text-xs font-mono text-ivory/70">
+                                Recalculated Payable Total: <strong className="text-gold">₹{Math.max(0, (o.subtotal || 0) - (o.discount || 0) + (o.deliveryFee || 0) + editExtraFee).toLocaleString('en-IN')}</strong>
+                              </div>
+                              <button
+                                type="button"
+                                disabled={isSavingDelivery}
+                                onClick={async () => {
+                                  setIsSavingDelivery(true);
+                                  await updateOrderDelivery(o.id, {
+                                    extraDeliveryFee: editExtraFee,
+                                    deliveryFeeStatus: editFeeStatus,
+                                    deliveryFeeNote: editFeeNote
+                                  });
+                                  setIsSavingDelivery(false);
+                                  setDeliveryEditOrderId(null);
+                                }}
+                                className="px-3.5 py-1.5 rounded-lg bg-gold hover:bg-gold-light text-obsidian text-xs font-bold font-mono transition-all disabled:opacity-50"
+                              >
+                                {isSavingDelivery ? 'Saving...' : 'Save & Sync Live'}
+                              </button>
+                            </div>
+                          </div>
+                        )}
 
                         {/* Items Ordered Pill List */}
                         <div className="pt-2 flex flex-wrap gap-2">
@@ -501,21 +648,27 @@ export const LiveBagFeedView: React.FC = () => {
                     <div className="flex flex-col md:items-end justify-between gap-3 pt-3 md:pt-0 border-t md:border-t-0 border-gold/15 flex-shrink-0">
                       <div className="text-left md:text-right">
                         <div className="text-xl font-serif font-bold text-gold">
-                          ₹{o.finalTotal.toLocaleString('en-IN')}
+                          ₹{(o.payableTotal ?? o.finalTotal).toLocaleString('en-IN')}
+                        </div>
+                        <div className="text-[10px] text-ivory/60 font-mono">
+                          Payable Total
                         </div>
                         {o.discount > 0 && (
-                          <div className="text-[11px] text-emerald-stock font-mono">
+                          <div className="text-[11px] text-emerald-stock font-mono mt-0.5">
                             Saved ₹{o.discount.toLocaleString('en-IN')} ({o.couponCode})
                           </div>
                         )}
                         <div className="text-[10px] text-ivory/40 font-mono mt-0.5">
-                          Subtotal: ₹{o.subtotal.toLocaleString('en-IN')}
+                          Subtotal: ₹{o.subtotal.toLocaleString('en-IN')} | Delivery: ₹{(o.deliveryFee || 0) + (o.extraDeliveryFee || 0)}
                         </div>
                       </div>
 
                       <div className="flex items-center gap-2">
+                        {/* Dynamic WhatsApp Link */}
                         <a
-                          href={o.whatsAppUrl}
+                          href={`https://wa.me/${(settings?.whatsappNumber || '917871501939').replace(/\D/g, '')}?text=${encodeURIComponent(
+                            `Hi ${o.customerName}! Your Tara Luxe order (${trackingCode}) details:\n- Total Payable: ₹${o.payableTotal ?? o.finalTotal}\n- Payment: ${o.paymentMode}\n- Delivery: ₹${(o.deliveryFee || 0) + (o.extraDeliveryFee || 0)} (${o.deliveryFeeStatus || 'FREE'})\n- Status: ${o.status}\n\nTrack your order anytime at: https://tara-luxe-in.pages.dev`
+                          )}`}
                           target="_blank"
                           rel="noreferrer"
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600/25 hover:bg-emerald-600/40 border border-emerald-500/60 text-emerald-300 text-xs font-semibold transition-all shadow-sm"
